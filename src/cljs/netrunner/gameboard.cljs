@@ -582,7 +582,8 @@
                                                              "\" subroutine on " title)})
                          :dangerouslySetInnerHTML #js {:__html (add-symbols (str "Let fire: \"" (:label sub) "\""))}}])
                 subroutines)])
-        (let [actions (action-list cursor)]
+        (let [actions (action-list cursor)
+              dynabi-count (count (filter #(= (first %) :dynamic) abilities))]
           (when (or (> (+ (count actions) (count abilities) (count subroutines)) 1)
                     (some #{"derez" "advance"} actions)
                     (= type "ICE"))
@@ -592,12 +593,12 @@
                   actions)
              (map-indexed
               (fn [i ab]
-                (if (:auto-pump ab)
-                  [:div {:on-click #(do (send-command "auto-pump" {:card @cursor}))
+                (if (:dynamic ab)
+                  [:div {:on-click #(do (send-command "dynamic-ability" (assoc (select-keys ab [:dynamic :source :index])
+                                                                          :card @cursor)))
                          :dangerouslySetInnerHTML #js {:__html (add-symbols (str (ability-costs ab) (:label ab)))}}]
                   [:div {:on-click #(do (send-command "ability" {:card @cursor
-                                                                 :ability (if (some (fn [a] (:auto-pump a)) abilities)
-                                                                            (dec i) i)})
+                                                                 :ability (- i dynabi-count)})
                                         (-> (om/get-node owner "abilities") js/$ .fadeOut))
                          :dangerouslySetInnerHTML #js {:__html (add-symbols (str (ability-costs ab) (:label ab)))}}]))
               abilities)
@@ -850,7 +851,7 @@
       [:div.server
        (let [ices (:ices server)
              run-pos (:position run)
-             current-ice (when (and run (pos? run-pos))
+             current-ice (when (and run (pos? run-pos) (<= run-pos (count ices)))
                            (nth ices (dec run-pos)))
              run-arrow (sab/html [:div.run-arrow [:div]])
              max-hosted (apply max (map #(count (:hosted %)) ices))]
@@ -907,20 +908,20 @@
 (defmethod board-view "Runner" [{:keys [player run]}]
   (om/component
    (sab/html
-    (let [is-opponent (= (:side @game-state) :corp)
+    (let [is-me (= (:side @game-state) :runner)
           centrals (sab/html
                     [:div.runner-centrals
                      (om/build discard-view player)
                      (om/build deck-view player)
                      (om/build identity-view player)])]
-      [:div.runner-board {:class (if is-opponent "opponent" "me")}
-       (when is-opponent centrals)
+      [:div.runner-board {:class (if is-me "me" "opponent")}
+       (when-not is-me centrals)
        (for [zone [:program :hardware :resource :facedown]]
          [:div
           (for [c (zone (:rig player))]
             [:div.card-wrapper {:class (when (playable? c) "playable")}
              (om/build card-view c)])])
-       (when-not is-opponent centrals)]))))
+       (when is-me centrals)]))))
 
 (defn cond-button [text cond f]
   (sab/html
@@ -946,7 +947,7 @@
 (defn update-audio [{:keys [gameid sfx sfx-current-id] :as cursor} owner]
   ;; When it's the first game played with this state or when the sound history comes from different game, we skip the cacophony
   (let [sfx-last-played (om/get-state owner :sfx-last-played)]
-    (when (and (get-in @app-state [:options :enablesounds])
+    (when (and (get-in @app-state [:options :sounds])
                (not (nil? sfx-last-played))
                (= gameid (:gameid sfx-last-played)))
       ;; Skip the SFX from queue with id smaller than the one last played, queue the rest
