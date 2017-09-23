@@ -197,6 +197,11 @@
 (defn release-zone [state side cid tside tzone]
   (swap! state update-in [tside :locked tzone] #(remove #{cid} %)))
 
+(defn lock-install [state side cid tside]
+  (swap! state update-in [tside :lock-install] #(conj % cid)))
+
+(defn unlock-install [state side cid tside]
+  (swap! state update-in [tside :lock-install] #(remove #{cid} %)))
 
 ;;; Small utilities for card properties.
 (defn in-server?
@@ -274,6 +279,11 @@
 (defn untrashable-while-rezzed? [card]
   (and (card-flag? card :untrashable-while-rezzed true) (rezzed? card)))
 
+(defn install-locked?
+  "Checks if installing is locked"
+  [state side]
+  (seq (get-in @state [side :lock-install])))
+
 (defn- can-rez-reason
   "Checks if the corp can rez the card.
   Returns true if so, otherwise the reason:
@@ -322,7 +332,8 @@
 (defn can-steal?
   "Checks if the runner can steal agendas"
   [state side card]
-  (check-flag-types? state side card :can-steal [:current-turn :current-run]))
+  (and (check-flag-types? state side card :can-steal [:current-turn :current-run])
+       (check-flag-types? state side card :can-steal [:current-turn :persistent])))
 
 (defn can-access?
   "Checks if the runner can access the specified card"

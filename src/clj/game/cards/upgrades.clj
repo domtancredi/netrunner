@@ -54,15 +54,50 @@
    {:events {:successful-run {:interactive (req true)
                               :req (req this-server)
                               :trace {:base 5 :msg "give the Runner 1 tag"
-                                      :effect (effect (tag-runner :runner 1))
+                                      :delayed-completion true
+                                      :effect (effect (tag-runner :runner eid 1))
                                       :unsuccessful {:effect (effect (system-msg "trashes Bernice Mai from the unsuccessful trace")
                                                                      (trash card))}}}}}
+
+   "Black Level Clearance"
+   {:events {:successful-run
+             {:interactive (req true)
+              :req (req this-server)
+              :delayed-completion true
+              :effect (effect (continue-ability
+                                {:prompt "Take 1 brain damage or jack out?"
+                                 :player :runner
+                                 :choices ["Take 1 brain damage" "Jack out"]
+                                 :effect (req (if (= target "Take 1 brain damage")
+                                                (damage state side eid :brain 1 {:card card})
+                                                (do (jack-out state side nil)
+                                                    (swap! state update-in [:runner :prompt] rest)
+                                                    (close-access-prompt state side)
+                                                    (handle-end-run state side)
+                                                    (gain state :corp :credit 5)
+                                                    (draw state :corp)
+                                                    (system-msg state :corp (str "gains 5 [Credits] and draws 1 card. Black Level Clearance is trashed"))
+                                                    (trash state side card)
+                                                    (effect-completed state side eid))))}
+                               card nil))}}}
 
    "Breaker Bay Grid"
    {:events {:pre-rez-cost {:req (req (and (is-remote? (second (:zone card)))
                                            (or (= (:zone card) (:zone target))
                                                (= (:zone card) (:zone (get-card state (:host target)))))))
                             :effect (effect (rez-cost-bonus -5))}}}
+
+   "Bryan Stinson"
+   {:abilities [{:cost [:click 1]
+                 :req (req (and (< (:credit runner) 6)
+                                (< 0 (count (filter #(and (is-type? % "Operation")
+                                                          (has-subtype? % "Transaction")) (:discard corp))))))
+                 :label "Play a transaction operation from Archives ignoring all costs and remove it from the game"
+                 :prompt "Choose a transaction operation to play"
+                 :msg (msg "play " (:title target) " from Archives ignoring all costs and remove it from the game")
+                 :choices (req (cancellable (filter #(and (is-type? % "Operation")
+                                                          (has-subtype? % "Transaction")) (:discard corp)) :sorted))
+                 :effect (effect (play-instant nil target {:ignore-cost true}) (move target :rfg))}]}
 
    "Caprice Nisei"
    {:events {:pass-ice {:req (req (and this-server
@@ -78,7 +113,8 @@
 
    "ChiLo City Grid"
    {:events {:successful-trace {:req (req this-server)
-                                :effect (effect (tag-runner :runner 1))
+                                :delayed-completion true
+                                :effect (effect (tag-runner :runner eid 1))
                                 :msg "give the Runner 1 tag"}}}
 
    "Corporate Troubleshooter"
@@ -114,7 +150,7 @@
                                     :req (req this-server)
                                     :effect (req (swap! state update-in [:run :run-effect] dissoc :replace-access)
                                                  (swap! state update-in [:run] dissoc :successful)
-                                                 (swap! state update-in [:runner :register :successful-run] #(rest %)))}}})
+                                                 (swap! state update-in [:runner :register :successful-run] #(next %)))}}})
 
    "Cyberdex Virus Suite"
    {:access {:delayed-completion true
@@ -131,6 +167,23 @@
 
    "Dedicated Technician Team"
    {:recurring 2}
+
+   "Defense Construct"
+   {:advanceable :always
+    :abilities [{:label "[Trash]: Add 1 facedown card from Archives to HQ for each advancement token"
+                 :req (req (and run (= (:server run) [:archives])
+                                (pos? (get-in card [:advance-counter] 0))))
+                 :effect (effect (resolve-ability
+                                   {:show-discard true
+                                    :choices {:max (get-in card [:advance-counter] 0)
+                                              :req #(and (= (:side %) "Corp")
+                                                         (not (:seen %))
+                                                         (= (:zone %) [:discard]))}
+                                              :msg (msg "add " (count targets) " facedown cards in Archives to HQ")
+                                    :effect (req (doseq [c targets]
+                                                   (move state side c :hand)))}
+                                  card nil)
+                                 (trash card))}]}
 
    "Disposable HQ"
    (letfn [(dhq [n i]
@@ -217,6 +270,17 @@
                  :effect (req (resolve-ability state side trash-program card nil)
                               (trash state side card {:cause :ability-cost})
                               (lose state :runner :tag 1))}]}
+
+   "Khondi Plaza"
+   {:recurring (effect (set-prop card :rec-counter (count (get-remotes @state))))
+    :effect (effect (set-prop card :rec-counter (count (get-remotes @state))))}
+
+   "Manta Grid"
+   {:events {:successful-run-ends
+             {:msg "gain a [Click] next turn"
+              :req (req (and (= (first (:server target)) (second (:zone card)))
+                             (or (< (:credit runner) 6) (zero? (:click runner)))))
+              :effect (req (swap! state update-in [:corp :extra-click-temp] (fnil inc 0)))}}}
 
    "Marcus Batty"
    {:abilities [{:req (req this-server)
@@ -343,6 +407,14 @@
                                                (= (:zone card) (:zone (get-card state (:host target)))))))
                          :effect (effect (trash-cost-bonus 3))}}}
 
+   "Oberth Protocol"
+   {:additional-cost [:forfeit]
+    :events {:advance {:req (req (and (= (second (:zone target)) (second (:zone card)))
+                                      (empty? (filter #(= (second (:zone %)) (second (:zone card)))
+                                                      (map first (turn-events state side :advance))))))
+                       :msg (msg "place an additional advancement token on " (card-str state target))
+                       :effect (effect (add-prop :corp target :advance-counter 1 {:placed true}))}}}
+
    "Off the Grid"
    {:implementation "Installation restriction not enforced"
     :effect (req (prevent-run-on-server state card (second (:zone card))))
@@ -355,14 +427,22 @@
     :leave-play (req (enable-run-on-server state card (second (:zone card))))}
 
    "Old Hollywood Grid"
-   (let [ohg {:req (req this-server)
-              :effect (effect (register-run-flag!
+   (let [ohg {:req (req (or (= (:zone card) (:zone target)) (= (central->zone (:zone target)) (butlast (:zone card)))))
+              :effect (effect (register-persistent-flag!
                                 card :can-steal
-                                (fn [state side card]
+                                (fn [state _ card]
                                   (if-not (some #(= (:title %) (:title card)) (:scored runner))
                                     ((constantly false) (toast state :runner "Cannot steal due to Old Hollywood Grid." "warning"))
                                     true))))}]
-     (assoc-in ohg [:events :run] ohg))
+     {:trash-effect
+              {:req (req (and (= :servers (first (:previous-zone card))) (:run @state)))
+               :effect (effect (register-events {:pre-steal-cost (assoc ohg :req (req (or (= (:zone target) (:previous-zone card))
+                                                                                          (= (central->zone (:zone target))
+                                                                                             (butlast (:previous-zone card))))))
+                                                 :run-ends {:effect (effect (unregister-events card))}}
+                                                (assoc card :zone '(:discard))))}
+      :events {:pre-steal-cost ohg
+               :post-access-card {:effect (effect (clear-persistent-flag! target :can-steal))}}})
 
    "Panic Button"
    {:init {:root "HQ"} :abilities [{:cost [:credit 1] :label "Draw 1 card" :effect (effect (draw))
@@ -390,9 +470,7 @@
                                                :msg "do 1 meat damage and give the Runner 1 tag"
                                                :delayed-completion true
                                                :effect (req (when-completed (damage state side :meat 1 {:card card})
-                                                                            (do (tag-runner state :runner 1)
-                                                                                ;; TO-DO: extend effect-completed to tag prevention
-                                                                                (effect-completed state side eid))))}}}
+                                                                            (tag-runner state :runner eid 1)))}}}
                                card nil))}}
 
    "Product Placement"
@@ -479,6 +557,21 @@
       :label "Take all credits"
       :effect (effect (gain :credit (get-in card [:counter :credit] 0))
                       (set-prop card :counter {:credit 0}))}]}
+
+   "Signal Jamming"
+   {:abilities [{:label "[Trash]: Cards cannot be installed until the end of the run"
+                 :msg (msg "prevent cards being installed until the end of the run")
+                 :req (req this-server)
+                 :effect (effect (trash (get-card state card) {:cause :ability-cost}))}]
+    :trash-effect {:effect (effect (lock-install (:cid card) :runner)
+                                   (lock-install (:cid card) :corp)
+                                   (toast :runner "Cannot install until the end of the run")
+                                   (toast :corp "Cannot install until the end of the run")
+                                   (register-events {:run-ends {:effect (effect (unlock-install (:cid card) :runner)
+                                                                                (unlock-install (:cid card) :corp))}}
+                                                    (assoc card :zone '(:discard))))}
+    :events {:run-ends nil
+             :turn-ends {:effect (effect (unregister-events card))}}}
 
    "Simone Diego"
    {:recurring 2}

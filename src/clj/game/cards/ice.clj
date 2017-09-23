@@ -26,7 +26,8 @@
    Mostly used with tag-trace"
   {:label "Give the Runner 1 tag"
    :msg "give the Runner 1 tag"
-   :effect (effect (tag-runner :runner 1))})
+   :delayed-completion true
+   :effect (effect (tag-runner :runner eid 1))})
 
 (def add-power-counter
   "Adds 1 power counter to the card."
@@ -208,7 +209,7 @@
                                                        (continue-ability
                                                          :runner {:optional
                                                                   {:player :runner
-                                                                   :prompt "Allow Archangel trace to fire?"
+                                                                   :prompt "You are encountering Archangel. Allow its subroutine to fire?"
                                                                    :priority 1
                                                                    :yes-ability {:delayed-completion true
                                                                                  :effect (effect (play-subroutine eid {:card card :subroutine 0}))}
@@ -239,7 +240,7 @@
 
    "Architect"
    {:flags {:untrashable-while-rezzed true}
-    :subroutines [{:msg "look at the top 5 cards of R&D"
+    :subroutines [{:label "Look at the top 5 cards of R&D"
                    :prompt "Choose a card to install"
                    :priority true
                    :activatemsg "uses Architect to look at the top 5 cards of R&D"
@@ -278,7 +279,8 @@
 
    "Bandwidth"
    {:subroutines [{:msg "give the Runner 1 tag"
-                   :effect (effect (tag-runner :runner 1)
+                   :delayed-completion true
+                   :effect (effect (tag-runner :runner eid 1)
                                    (register-events
                                      {:successful-run {:effect (effect (lose :runner :tag 1))
                                                        :msg "make the Runner lose 1 tag"}
@@ -320,13 +322,13 @@
 
    "Bulwark"
    {:effect take-bad-pub
-    :abilities [{:msg "gain 2[Credits] if there is an installed AI"
+    :abilities [{:msg "gain 2 [Credits] if there is an installed AI"
                  :req (req (some #(has-subtype? % "AI") (all-installed state :runner)))
                  :effect (effect (gain :credit 2))}]
     :subroutines [(assoc trash-program :player :runner
                                        :msg "force the Runner to trash 1 program"
-                                       :label "The runner trashes 1 program")
-                  {:msg "gain 2[Credits] and end the run"
+                                       :label "The Runner trashes 1 program")
+                  {:msg "gain 2 [Credits] and end the run"
                    :effect (effect (gain :credit 2)
                                    (end-run))}]}
 
@@ -385,6 +387,14 @@
                :corp-turn-ends turn-end-ability}
       :subroutines [end-the-run]})
 
+   "Chiyashi"
+   {:abilities [{:label "Trash the top 2 cards of the Runner's Stack"
+                 :req (req (some #(has-subtype? % "AI") (all-installed state :runner)))
+                 :msg (msg (str "trash " (join ", " (map :title (take 2 (:deck runner)))) " from the Runner's Stack"))
+                 :effect (effect (mill :runner 2))}]
+    :subroutines [(do-net-damage 2)
+                  end-the-run]}
+
    "Chrysalis"
    {:subroutines [(do-net-damage 2)]
     :access {:delayed-completion true
@@ -393,7 +403,7 @@
                              (continue-ability
                                :runner {:optional
                                         {:player :runner
-                                         :prompt "Allow Chrysalis subroutine to fire?"
+                                         :prompt "You are encountering Chrysalis. Allow its subroutine to fire?"
                                          :priority 1
                                          :yes-ability {:effect (effect (clear-wait-prompt :corp)
                                                                        (play-subroutine eid {:card card :subroutine 0}))}
@@ -429,6 +439,28 @@
 
    "Cobra"
    {:subroutines [trash-program (do-net-damage 2)]}
+
+   "Colossus"
+   {:advanceable :always
+    :subroutines [{:label "Give the Runner 1 tag (Give the Runner 2 tags)"
+                   :delayed-completion true
+                   :msg (msg "give the Runner " (if (> 3 (+ (:advance-counter card 0) (:extra-advance-counter card 0))) "1 tag" "2 tags"))
+                   :effect (effect (tag-runner :runner eid (if (> 3 (+ (:advance-counter card 0) (:extra-advance-counter card 0))) 1 2)))}
+                  {:label "Trash 1 program (Trash 1 program and 1 resource)"
+                   :delayed-completion true
+                   :msg (msg "trash 1 program" (when (< 2 (+ (:advance-counter card 0) (:extra-advance-counter card 0))) " and 1 resource"))
+                   :effect (req (when-completed (resolve-ability state side trash-program card nil)
+                                                (if (> 3 (+ (:advance-counter card 0) (:extra-advance-counter card 0)))
+                                                  (effect-completed state side eid)
+                                                  (continue-ability state side
+                                                    {:prompt "Choose a resource to trash"
+                                                     :msg (msg "trash " (:title target))
+                                                     :choices {:req #(and (installed? %)
+                                                                          (is-type? % "Resource"))}
+                                                     :cancel-effect (req (effect-completed state side eid))
+                                                     :effect (effect (trash target {:cause :subroutine}))}
+                                                   card nil))))}]
+    :strength-bonus advance-counters}
 
    "Cortex Lock"
    {:subroutines [{:label "Do 1 net damage for each unused memory unit the Runner has"
@@ -502,8 +534,9 @@
                         :effect (req (end-run state :runner)
                                      (system-msg state :runner "chooses to end the run on encountering Data Raven"))}
                        {:label "Take 1 tag"
-                        :effect (req (tag-runner state :runner 1)
-                                     (system-msg state :runner "chooses to take 1 tag on encountering Data Raven"))}]
+                        :delayed-completion true
+                        :effect (req (system-msg state :runner "chooses to take 1 tag on encountering Data Raven")
+                                     (tag-runner state :runner eid 1))}]
     :subroutines [(trace-ability 3 add-power-counter)]}
 
    "Data Ward"
@@ -511,17 +544,18 @@
                         :effect (req (pay state :runner card :credit 3)
                                      (system-msg state :runner "chooses to pay 3 [Credits] on encountering Data Ward"))}
                        {:label "Take 1 tag"
-                        :effect (req (tag-runner state :runner 1)
-                                     (system-msg state :runner "chooses to take 1 tag on encountering Data Ward"))}]
+                        :delayed-completion true
+                        :effect (req (system-msg state :runner "chooses to take 1 tag on encountering Data Ward")
+                                     (tag-runner state :runner eid 1))}]
     :subroutines [{:label "End the run if the Runner is tagged"
                    :req (req tagged)
                    :msg "end the run"
                    :effect (effect (end-run))}]}
 
    "DNA Tracker"
-   {:abilities [{:msg "do 1 net damage and make the Runner lose 2 [Credits]"
-                 :effect (req (when-completed (damage state side :net 1 {:card card})
-                                              (lose state :runner :credit 2)))}]}
+   {:subroutines [{:msg "do 1 net damage and make the Runner lose 2 [Credits]"
+                   :effect (req (when-completed (damage state side :net 1 {:card card})
+                                                (lose state :runner :credit 2)))}]}
 
    "Dracō"
    {:prompt "How many power counters?"
@@ -532,12 +566,18 @@
     :strength-bonus (req (get-in card [:counter :power] 0))
     :subroutines [(trace-ability 2 {:label "Give the Runner 1 tag and end the run"
                                     :msg "give the Runner 1 tag and end the run"
-                                    :effect (effect (tag-runner :runner 1)
+                                    :delayed-completion true
+                                    :effect (effect (tag-runner :runner eid 1)
                                                     (end-run))})]}
 
    "Eli 1.0"
    {:subroutines [end-the-run]
     :runner-abilities [(runner-break [:click 1] 1)]}
+
+   "Eli 2.0"
+   {:subroutines [{:msg "draw 1 card" :effect (effect (draw))}
+                  end-the-run]
+    :runner-abilities [(runner-break [:click 2] 2)]}
 
    "Enforcer 1.0"
    {:additional-cost [:forfeit]
@@ -641,6 +681,12 @@
                                                                              (end-run))}
                                                      card nil))})]}
 
+   "Free Lunch"
+   {:abilities [(power-counter-ability {:label "Runner loses 1 [Credits]"
+                                        :msg "make the Runner lose 1 [Credits]"
+                                        :effect (effect (lose :runner :credit 1))})]
+    :subroutines [add-power-counter]}
+
    "Galahad"
    (grail-ice end-the-run)
 
@@ -715,6 +761,26 @@
                   end-the-run]
     :runner-abilities [(runner-break [:click 2] 2)]}
 
+   "Herald"
+   {:subroutines [(gain-credits 2)
+                  {:label "Pay 1 [Credits] to place 1 advancement token on a card that can be advanced"
+                   :msg (msg "place 1 advancement token on " (card-str state target))
+                   :choices {:req can-be-advanced?}
+                   :cost [:credit 1] :effect (effect (add-prop target :advance-counter 1 {:placed true}))}]
+    :access {:delayed-completion true
+             :req (req (not= (first (:zone card)) :discard))
+             :effect (effect (show-wait-prompt :corp "Runner to decide to break Herald subroutines")
+                             (continue-ability
+                               :runner {:optional
+                                        {:player :runner
+                                         :prompt "You are encountering Herald. Allow its subroutines to fire?"
+                                         :priority 1
+                                         :yes-ability {:effect (effect (clear-wait-prompt :corp)
+                                                                       (play-subroutine eid {:card card :subroutine 0}))}
+                                         :no-ability {:effect (effect (clear-wait-prompt :corp)
+                                                                      (effect-completed eid))}}}
+                              card nil))}}
+
    "Hourglass"
    {:subroutines [{:msg "force the Runner to lose 1 [Click] if able"
                    :effect (effect (lose :runner :click 1))}]}
@@ -763,17 +829,27 @@
    {:subroutines [trash-program
                   (trace-ability 1 {:label "Give the Runner 1 tag and do 1 brain damage"
                                     :msg "give the Runner 1 tag and do 1 brain damage"
-                                    :effect (effect (damage eid :brain 1 {:card card})
-                                                    (tag-runner :runner 1))})]
+                                    :delayed-completion true
+                                    :effect (req (when-completed (damage state :runner :brain 1 {:card card})
+                                                                 (tag-runner state :runner eid 1)))})]
     :runner-abilities [(runner-break [:click 1] 1)]}
 
    "Ichi 2.0"
    {:subroutines [trash-program
                   (trace-ability 3 {:label "Give the Runner 1 tag and do 1 brain damage"
                                     :msg "give the Runner 1 tag and do 1 brain damage"
-                                    :effect (effect (damage eid :brain 1 {:card card})
-                                                    (tag-runner :runner 1))})]
+                                    :delayed-completion true
+                                    :effect (req (when-completed (damage state :runner :brain 1 {:card card})
+                                                                 (tag-runner state :runner eid 1)))})]
     :runner-abilities [(runner-break [:click 2] 2)]}
+
+   "Inazuma"
+   {:abilities [{:msg "prevent the Runner from breaking subroutines on the next piece of ICE they encounter this run"}
+                {:msg "prevent the Runner from jacking out until after the next piece of ICE"
+                 :effect (effect (register-events
+                                   {:pass-ice {:effect (req (swap! state update-in [:run] dissoc :prevent-jack-out)
+                                                            (unregister-events state side card))}} card)
+                                 (prevent-jack-out))}]}
 
    "Information Overload"
    {:implementation "Encounter effect is manual"
@@ -784,12 +860,12 @@
 
    "IP Block"
    {:abilities [(assoc give-tag :req (req (not-empty (filter #(has-subtype? % "AI") (all-installed state :runner))))
-                                :label "Give the Runner 1 tag if there is an installed AI")
-                (tag-trace 3)
-                {:label "End the run if the Runner is tagged"
-                 :req (req tagged)
-                 :msg "end the run"
-                 :effect (effect (end-run))}]}
+                                :label "Give the Runner 1 tag if there is an installed AI")]
+    :subroutines [(tag-trace 3)
+                  {:label "End the run if the Runner is tagged"
+                   :req (req tagged)
+                   :msg "end the run"
+                   :effect (effect (end-run))}]}
 
    "IQ"
    {:effect (req (add-watch state (keyword (str "iq" (:cid card)))
@@ -823,12 +899,31 @@
    {:subroutines [(do-brain-damage 1)]
     :runner-abilities [(runner-break [:click 1] 1)]}
 
+   "Kakugo"
+   {:events {:pass-ice {:delayed-completion true
+                        :req (req (= target card))
+                        :msg "do 1 net damage"
+                        :effect (effect (damage eid :net 1 {:card card}))}}
+    :subroutines [end-the-run]}
+
    "Kitsune"
    {:subroutines [{:prompt "Choose a card in HQ to force access"
                    :choices {:req in-hand?}
                    :label "Force the Runner to access a card in HQ"
                    :msg (msg "force the Runner to access " (:title target))
-                   :effect (effect (handle-access targets) (trash card))}]}
+                   :effect (req (trash state side card)
+                                (when-completed (handle-access state side targets)
+                                  (when-completed (trigger-event-sync state side :pre-access :hq)
+                                    (let [from-hq (dec (access-count state side :hq-access))]
+                                      (continue-ability
+                                        state :runner
+                                        (access-helper-hq
+                                          state from-hq
+                                          ; access-helper-hq uses a set to keep track of which cards have already
+                                          ; been accessed. by adding HQ root's contents to this set, we make the runner
+                                          ; unable to access those cards, as Kitsune intends.
+                                          (conj (set (get-in @state [:corp :servers :hq :content])) target))
+                                       card nil)))))}]}
 
    "Komainu"
    {:abilities [{:label "Gain subroutines"
@@ -862,6 +957,24 @@
 
    "Lycan"
    (morph-ice "Sentry" "Code Gate" trash-program)
+
+   "Macrophage"
+   {:subroutines [(trace-ability 4 {:label "Purge virus counters"
+                                    :msg "purge virus counters"
+                                    :effect (effect (purge))})
+                  (trace-ability 3 {:label "Trash a virus"
+                                    :prompt "Choose a virus to trash"
+                                    :msg (msg "trash " (:title target))
+                                    :choices {:req #(and (installed? %)
+                                                         (has? % :subtype "Virus"))}
+                                    :effect (effect (trash target {:cause :subroutine})
+                                                    (clear-wait-prompt :runner))})
+                  (trace-ability 2 {:label "Remove a virus in the Heap from the game"
+                                    :prompt "Choose a virus in the Heap to remove from the game"
+                                    :choices (req (cancellable (filter #(has? % :subtype "Virus") (:discard runner)) :sorted))
+                                    :msg (msg "remove " (:title target) " from the game")
+                                    :effect (effect (move :runner target :rfg))})
+                  (trace-ability 1 end-the-run)]}
 
    "Magnet"
    {:delayed-completion true
@@ -912,10 +1025,11 @@
                    :msg (msg "do " (if (> 3 (+ (:advance-counter card 0) (:extra-advance-counter card 0))) 1 3) " net damage")
                    :effect (effect (damage eid :net (if (> 3 (+ (:advance-counter card 0) (:extra-advance-counter card 0))) 1 3) {:card card}))}
                   {:label "Give the Runner 1 tag (and end the run)"
+                   :delayed-completion true
                    :msg (msg "give the Runner 1 tag"
-                          (when (<= 3 (+ (:advance-counter card 0) (:extra-advance-counter card 0))) " and end the run"))
-                   :effect (req (tag-runner state :runner 1)
-                             (when (<= 3 (+ (:advance-counter card 0) (:extra-advance-counter card 0)))
+                             (when (<= 3 (+ (:advance-counter card 0) (:extra-advance-counter card 0))) " and end the run"))
+                   :effect (req (tag-runner state :runner eid 1)
+                                (when (<= 3 (+ (:advance-counter card 0) (:extra-advance-counter card 0)))
                                   (end-run state side)))}]}
 
    "Merlin"
@@ -979,6 +1093,20 @@
    {:subroutines [(gain-credits 2)
                   trash-program]
     :runner-abilities [(runner-break [:credit 2] 1)]}
+
+   "Nerine 2.0"
+   {:subroutines [{:label "Do 1 brain damage and Corp may draw 1 card"
+                   :delayed-completion true
+                   :msg "do 1 brain damage"
+                   :effect (req (when-completed (damage state :runner :brain 1 {:card card})
+                                                (resolve-ability state side
+                                                  {:optional
+                                                   {:prompt "Draw 1 card?"
+                                                    :yes-ability {:msg "draw 1 card"
+                                                                  :effect (effect (draw))}
+                                                    :no-ability {:effect (req (effect-completed state side eid))}}}
+                                                 card nil)))}]
+    :runner-abilities [(runner-break [:click 2] 2)]}
 
    "Neural Katana"
    {:subroutines [(do-net-damage 3)]}
@@ -1052,6 +1180,12 @@
    "Rainbow"
    {:subroutines [end-the-run]}
 
+   "Ravana 1.0"
+   {:subroutines [{:label "Resolve a subroutine on another piece of rezzed bioroid ICE"
+                   :choices {:req #(and (rezzed? %) (ice? %) (has-subtype? % "Bioroid"))}
+                   :msg (msg "resolve a subroutine on " (:title target))}]
+    :runner-abilities [(runner-break [:click 1] 1)]}
+
    "Red Tape"
    {:subroutines [{:label "Give +3 strength to all ICE for the remainder of the run"
                    :msg "give +3 strength to all ICE for the remainder of the run"
@@ -1088,15 +1222,17 @@
    "Sapper"
    {:subroutines [trash-program]
     :access {:delayed-completion true
-             :req (req (not= (first (:zone card)) :discard))
+             :req (req (and (not= (first (:zone card)) :discard)
+                            (some #(is-type? % "Program") (all-installed state :runner))))
              :effect (effect (show-wait-prompt :corp "Runner to decide to break Sapper subroutine")
                              (continue-ability
                                :runner {:optional
                                         {:player :runner
                                          :prompt "Allow Sapper subroutine to fire?"
                                          :priority 1
-                                         :yes-ability {:effect (effect (clear-wait-prompt :corp)
-                                                                       (play-subroutine :corp eid {:card card :subroutine 0}))}
+                                         :yes-ability {:effect (req (clear-wait-prompt state :corp)
+                                                                    (show-wait-prompt state :runner "Corp to trash a program with Sapper")
+                                                                    (play-subroutine state :corp eid {:card card :subroutine 0}))}
                                          :no-ability {:effect (effect (clear-wait-prompt :corp)
                                                                       (effect-completed eid))}}}
                               card nil))}}
@@ -1105,8 +1241,26 @@
    {:advanceable :always
     ;; Could replace this with (tag-trace advance-counters).
     :subroutines [{:label "Trace X - Give the Runner 1 tag"
-                   :trace {:base advance-counters :effect (effect (tag-runner :runner 1))
+                   :trace {:base advance-counters
+                           :delayed-completion true
+                           :effect (effect (tag-runner :runner eid 1))
                            :msg "give the Runner 1 tag"}}]}
+
+   "Seidr Adaptive Barrier"
+   {:effect (req (let [srv (second (:zone card))]
+                   (add-watch state (keyword (str "sab" (:cid card)))
+                              (fn [k ref old new]
+                                (let [ices (count (get-in new [:corp :servers srv :ices]))]
+                                  (when (not= (count (get-in old [:corp :servers srv :ices])) ices)
+                                    (update! ref side (assoc (get-card ref card) :strength-bonus ices))
+                                    (update-ice-strength ref side (get-card ref card))))))))
+    :strength-bonus (req (count (:ices (card->server state card))))
+    :leave-play (req (remove-watch state (keyword (str "sab" (:cid card)))))
+    :subroutines [end-the-run]}
+
+   "Self-Adapting Code Wall"
+   {:subroutines [end-the-run]
+    :flags {:cannot-lower-strength true}}
 
    "Sensei"
    {:subroutines [{:label "Give each other ICE encountered \"End the run\" for the remainder of the run"
@@ -1136,7 +1290,8 @@
                            :effect  (effect (move :runner target :deck))}}
                   {:label  "Give the Runner 1 tag"
                    :msg    "give the Runner 1 tag"
-                   :effect (effect (tag-runner :runner 1))}]
+                   :delayed-completion true
+                   :effect (effect (tag-runner :runner eid 1))}]
     :runner-abilities [(runner-break [:click 2] 2)]}
 
    "Shinobi"
@@ -1219,6 +1374,14 @@
                                         (is-type? % "Program")
                                         (has-subtype? % "AI"))}}]}
 
+   "SYNC BRE"
+   {:subroutines [(trace-ability 4 give-tag)
+                  (trace-ability 2 {:label "Runner reduces cards accessed by 1 for this run"
+                                    :delayed-completion true
+                                    :msg "reduce cards accessed for this run by 1"
+                                    :effect (effect (access-bonus -1))})]}
+
+
    "Taurus"
    (constellation-ice trash-hardware)
 
@@ -1226,8 +1389,9 @@
    {:implementation "Encounter effect is manual"
     :abilities [give-tag]
     :runner-abilities [{:label "Take 1 tag"
-                        :effect (req (tag-runner state :runner 1)
-                                     (system-msg state :runner "takes 1 tag on encountering Thoth"))}]
+                        :delayed-completion true
+                        :effect (req (system-msg state :runner "takes 1 tag on encountering Thoth")
+                                     (tag-runner state :runner eid 1))}]
     :subroutines [(trace-ability 4 {:label "Do 1 net damage for each Runner tag"
                                     :delayed-completion true
                                     :msg (msg "do " (:tag runner) " net damage")
@@ -1257,6 +1421,10 @@
                  :msg (msg "gain " (count (filter #(and (is-type? % "Asset") (rezzed? %))
                                                   (all-installed state :corp))) " subroutines")}]
     :subroutines [end-the-run]}
+
+   "Tribunal"
+   {:subroutines [{:msg "force the Runner to trash 1 installed card"
+                   :effect (effect (resolve-ability :runner trash-installed card nil))}]}
 
    "Troll"
    {:implementation "Encounter effect is manual"
@@ -1321,6 +1489,15 @@
    "Vanilla"
    {:subroutines [end-the-run]}
 
+   "Veritas"
+   {:subroutines [{:label "Corp gains 2 [Credits]"
+                   :msg "gain 2 [Credits]"
+                   :effect (effect (gain :corp :credit 2))}
+                  {:label "Runner loses 2 [Credits]"
+                   :msg "force the Runner to lose 2 [Credits]"
+                   :effect (effect (lose :runner :credit 2))}
+                  (trace-ability 2 give-tag)]}
+
    "Vikram 1.0"
    {:implementation "Program prevention is not implemented"
     :subroutines [{:msg "prevent the Runner from using programs for the remainder of this run"}
@@ -1367,6 +1544,15 @@
    "Wall of Thorns"
    {:subroutines [end-the-run
                   (do-net-damage 2)]}
+
+   "Watchtower"
+   {:subroutines [{:label "Search R&D and add 1 card to HQ"
+                   :prompt "Choose a card to add to HQ"
+                   :msg "add a card from R&D to HQ"
+                   :choices (req (cancellable (:deck corp) :sorted))
+                   :cancel-effect (effect (system-msg "cancels the effect of Watchtower"))
+                   :effect (effect (shuffle! :deck)
+                                   (move target :hand))}]}
 
    "Wendigo"
    (implementation-note
@@ -1423,4 +1609,10 @@
    "Zed 1.0"
    {:implementation "Restriction on having spent [click] is not implemented"
     :subroutines [(do-brain-damage 1)]
-    :runner-abilities [(runner-break [:click 1] 1)]}})
+    :runner-abilities [(runner-break [:click 1] 1)]}
+
+   "Zed 2.0"
+   {:implementation "Restriction on having spent [click] is not implemented"
+    :subroutines [trash-hardware
+                  (do-brain-damage 2)]
+    :runner-abilities [(runner-break [:click 2] 2)]}})

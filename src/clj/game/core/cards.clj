@@ -58,7 +58,7 @@
 (defn move
   "Moves the given card to the given new zone."
   ([state side card to] (move state side card to nil))
-  ([state side {:keys [zone cid host installed] :as card} to {:keys [front keep-server-alive] :as options}]
+  ([state side {:keys [zone cid host installed] :as card} to {:keys [front keep-server-alive force] :as options}]
    (let [zone (if host (map to-keyword (:zone host)) zone)
          src-zone (first zone)
          target-zone (if (vector? to) (first to) to)
@@ -66,12 +66,13 @@
      (when (and card (or host
                          (some #(when (= cid (:cid %)) %) (get-in @state (cons :runner (vec zone))))
                          (some #(when (= cid (:cid %)) %) (get-in @state (cons :corp (vec zone)))))
-                (not (seq (get-in @state [side :locked zone]))))
+                (or (empty? (get-in @state [side :locked (-> card :zone first)]))
+                    force))
        (let [dest (if (sequential? to) (vec to) [to])
              trash-hosted (fn [h]
                              (trash state side
-                               (dissoc (update-in h [:zone] #(map to-keyword %)) :facedown)
-                               {:unpreventable true})
+                                    (update-in h [:zone] #(map to-keyword %))
+                                    {:unpreventable true :suppress-event true})
                                ())
              update-hosted (fn [h]
                              (let [newz (flatten (list (if (vector? to) to [to])))
@@ -233,4 +234,3 @@
       (update! state side c)
       (when (active? card)
         (card-init state side c false)))))
-

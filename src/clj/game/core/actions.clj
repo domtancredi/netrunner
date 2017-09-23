@@ -31,7 +31,8 @@
 (defn click-draw
   "Click to draw."
   [state side args]
-  (when (and (not (get-in @state [side :register :cannot-draw])) (pay state side nil :click 1))
+  (when (and (not (get-in @state [side :register :cannot-draw]))
+             (pay state side nil :click 1 {:action :corp-click-draw}))
     (system-msg state side "spends [Click] to draw a card")
     (draw state side)
     (trigger-event state side (if (= side :corp) :corp-click-draw :runner-click-draw))
@@ -40,7 +41,7 @@
 (defn click-credit
   "Click to gain 1 credit."
   [state side args]
-  (when (pay state side nil :click 1)
+  (when (pay state side nil :click 1 {:action :corp-click-credit})
     (system-msg state side "spends [Click] to gain 1 [Credits]")
     (gain state side :credit 1)
     (trigger-event state side (if (= side :corp) :corp-click-credit :runner-click-credit))
@@ -89,10 +90,10 @@
         (do (trash state s c {:unpreventable true})
             (system-msg state side (str "trashes " label from-str)))
         ("Grip" "HQ")
-        (do (move state s (dissoc c :seen :rezzed) :hand)
+        (do (move state s (dissoc c :seen :rezzed) :hand {:force true})
             (system-msg state side (str "moves " label from-str " to " server)))
         ("Stack" "R&D")
-        (do (move state s (dissoc c :seen :rezzed) :deck {:front true})
+        (do (move state s (dissoc c :seen :rezzed) :deck {:front true :force true})
             (system-msg state side (str "moves " label from-str " to the top of " server)))
         nil))))
 
@@ -170,7 +171,9 @@
 (defn- do-play-ability [state side card ability targets]
   (let [cost (:cost ability)]
     (when (or (nil? cost)
-              (apply can-pay? state side (:title card) cost (get-in @state [:bonus :run-cost])))
+              (if (has-subtype? card "Run")
+                (apply can-pay? state side (:title card) cost (get-in @state [:bonus :run-cost]))
+                (apply can-pay? state side (:title card) cost)))
       (when-let [activatemsg (:activatemsg ability)]
         (system-msg state side activatemsg))
       (resolve-ability state side ability card targets))))
@@ -214,8 +217,6 @@
         source-abis (:abilities (cards (.replace source "'" "")))
         abi (when (< -1 index (count source-abis))
               (nth source-abis index))]
-    (prn card)
-    (prn source-abis)
     (when abi
       (do-play-ability state side card abi nil))))
 
@@ -253,7 +254,7 @@
   "Click to trash a resource."
   [state side args]
   (let [trash-cost (max 0 (- 2 (or (get-in @state [:corp :trash-cost-bonus]) 0)))]
-    (when-let [cost-str (pay state side nil :click 1 :credit trash-cost)]
+    (when-let [cost-str (pay state side nil :click 1 :credit trash-cost {:action :corp-trash-resource})]
       (resolve-ability state side
                        {:prompt "Choose a resource to trash"
                         :choices {:req #(is-type? % "Resource")}
@@ -264,7 +265,7 @@
 (defn do-purge
   "Purge viruses."
   [state side args]
-  (when-let [cost (pay state side nil :click 3)]
+  (when-let [cost (pay state side nil :click 3 {:action :corp-click-purge})]
     (purge state side)
     (let [spent (build-spend-msg cost "purge")
           message (str spent "all virus counters")]
@@ -273,43 +274,47 @@
 
 (defn rez
   "Rez a corp card."
-  ([state side card] (rez state side card nil))
-  ([state side {:keys [disabled] :as card} {:keys [ignore-cost no-warning force] :as args}]
+  ([state side card] (rez state side (make-eid state) card nil))
+  ([state side card args]
+   (rez state side (make-eid state) card args))
+  ([state side eid {:keys [disabled] :as card} {:keys [ignore-cost no-warning force] :as args}]
    (let [card (get-card state card)]
      (if (or force (can-rez? state side card))
        (do
          (trigger-event state side :pre-rez card)
-         (when (or (#{"Asset" "ICE" "Upgrade"} (:type card))
+         (if (or (#{"Asset" "ICE" "Upgrade"} (:type card))
                    (:install-rezzed (card-def card)))
-           (trigger-event state side :pre-rez-cost card)
-           (let [cdef (card-def card)
-                 cost (rez-cost state side card)
-                 costs (concat (when-not ignore-cost [:credit cost])
-                               (when (not= ignore-cost :all-costs)
-                                 (:additional-cost cdef)))]
-             (when-let [cost-str (apply pay state side card costs)]
-               ;; Deregister the derezzed-events before rezzing card
-               (when (:derezzed-events cdef)
-                 (unregister-events state side card))
-               (if (not disabled)
-                 (card-init state side (assoc card :rezzed true))
-                 (update! state side (assoc card :rezzed true)))
-               (doseq [h (:hosted card)]
-                 (update! state side (-> h
-                                         (update-in [:zone] #(map to-keyword %))
-                                         (update-in [:host :zone] #(map to-keyword %)))))
-               (system-msg state side (str (build-spend-msg cost-str "rez" "rezzes")
-                                           (:title card) (when ignore-cost " at no cost")))
-               (when (and (not no-warning) (:corp-phase-12 @state))
-                 (toast state :corp "You are not allowed to rez cards between Start of Turn and Mandatory Draw.
+           (do (trigger-event state side :pre-rez-cost card)
+               (let [cdef (card-def card)
+                     cost (rez-cost state side card)
+                     costs (concat (when-not ignore-cost [:credit cost])
+                                   (when (not= ignore-cost :all-costs)
+                                     (:additional-cost cdef)))]
+                 (when-let [cost-str (apply pay state side card costs)]
+                   ;; Deregister the derezzed-events before rezzing card
+                   (when (:derezzed-events cdef)
+                     (unregister-events state side card))
+                   (if (not disabled)
+                     (card-init state side (assoc card :rezzed true))
+                     (update! state side (assoc card :rezzed true)))
+                   (doseq [h (:hosted card)]
+                     (update! state side (-> h
+                                             (update-in [:zone] #(map to-keyword %))
+                                             (update-in [:host :zone] #(map to-keyword %)))))
+                   (system-msg state side (str (build-spend-msg cost-str "rez" "rezzes")
+                                               (:title card) (when ignore-cost " at no cost")))
+                   (when (and (not no-warning) (:corp-phase-12 @state))
+                     (toast state :corp "You are not allowed to rez cards between Start of Turn and Mandatory Draw.
                       Please rez prior to clicking Start Turn in the future." "warning"
-                        {:time-out 0 :close-button true}))
-               (if (ice? card)
-                 (do (update-ice-strength state side card)
-                     (play-sfx state side "rez-ice"))
-                 (play-sfx state side "rez-other"))
-               (trigger-event state side :rez card))))
-         (swap! state update-in [:bonus] dissoc :cost))))))
+                            {:time-out 0 :close-button true}))
+                   (if (ice? card)
+                     (do (update-ice-strength state side card)
+                         (play-sfx state side "rez-ice"))
+                     (play-sfx state side "rez-other"))
+                   (trigger-event-sync state side eid :rez card))))
+           (effect-completed state side eid))
+         (swap! state update-in [:bonus] dissoc :cost))
+       (effect-completed state side eid)))))
 
 (defn derez
   "Derez a corp card."
@@ -329,7 +334,7 @@
   [state side {:keys [card]}]
   (let [card (get-card state card)]
     (when (can-advance? state side card)
-      (when-let [cost (pay state side card :click 1 :credit 1)]
+      (when-let [cost (pay state side card :click 1 :credit 1 {:action :corp-advance})]
         (let [spent   (build-spend-msg cost "advance")
               card    (card-str state card)
               message (str spent card)]
@@ -401,7 +406,8 @@
   "Click to remove a tag."
   [state side args]
   (let [remove-cost (max 0 (- 2 (or (get-in @state [:runner :tag-remove-bonus]) 0)))]
-    (when-let [cost-str (pay state side nil :click 1 :credit remove-cost :tag 1)]
+    (when-let [cost-str (pay state side nil :click 1 :credit remove-cost)]
+      (lose state side :tag 1)
       (system-msg state side (build-spend-msg cost-str "remove 1 tag"))
       (play-sfx state side "click-remove-tag"))))
 
@@ -424,7 +430,7 @@
                           (when cur-ice
                             (update-ice-strength state side cur-ice))
                           (when next-ice
-                            (trigger-event state side :approach-ice next-ice))
+                            (trigger-event-sync state side (make-eid state) :approach-ice next-ice))
                           (doseq [p (filter #(has-subtype? % "Icebreaker") (all-installed state :runner))]
                             (update! state side (update-in (get-card state p) [:pump] dissoc :encounter))
                             (update-breaker-strength state side p)))))))
