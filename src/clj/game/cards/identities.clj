@@ -52,6 +52,35 @@
                                                              (clear-wait-prompt state :corp))}
                                                card nil)))}}}
 
+   "AgInfusion: New Miracles for a New World"
+   {:abilities [{:once :per-turn
+                 :req (req (and (:run @state) (not (rezzed? current-ice))))
+                 :prompt "Choose another server and redirect the run to its outermost position"
+                 :choices (req (cancellable servers))
+                 :msg (msg "trash the approached ICE. The Runner is now running on " target)
+                 :effect (req (let [dest (server->zone state target)]
+                                (trash state side current-ice)
+                                (swap! state update-in [:run]
+                                       #(assoc % :position (count (get-in corp (conj dest :ices)))
+                                                 :server (rest dest)))))}]}
+
+   "Alice Merchant: Clan Agitator"
+   {:events {:successful-run
+             {:delayed-completion true
+              :interactive (req true)
+              :req (req (and (= target :archives)
+                             (first-successful-run-on-server? state :archives)
+                             (not-empty (:hand corp))))
+              :effect (effect (show-wait-prompt :runner "Corp to trash 1 card from HQ")
+                              (continue-ability
+                                {:prompt "Choose a card in HQ to discard"
+                                 :player :corp
+                                 :choices (req (:hand corp))
+                                 :msg "force the Corp to trash 1 card from HQ"
+                                 :effect (effect (trash :corp target)
+                                                 (clear-wait-prompt :runner))}
+                               card nil))}}}
+
    "Andromeda: Dispossessed Ristie"
    {:events {:pre-start-game {:req (req (= side :runner))
                               :effect (effect (draw 4 {:suppress-event true}))}}
@@ -235,9 +264,11 @@
    "Haas-Bioroid: Architects of Tomorrow"
    {:events {:pass-ice
              {:delayed-completion true
+              :once :per-turn
               :req (req (and (rezzed? target)
                              (has-subtype? target "Bioroid")
-                             (first-event? state :corp :pass-ice)))
+                             (empty? (filter #(and (rezzed? %) (has-subtype? % "Bioroid"))
+                                             (turn-events state side :pass-ice)))))
               :effect (effect (show-wait-prompt :runner "Corp to use Haas-Bioroid: Architects of Tomorrow")
                               (continue-ability
                                 {:prompt "Choose a bioroid to rez" :player :corp
@@ -329,6 +360,20 @@
                            :msg "draw 1 card"
                            :once :per-turn
                            :effect (effect (draw 1))}}}
+
+   "Jemison Astronautics: Sacrifice. Audacity. Success."
+   {:events {:corp-forfeit-agenda
+             {:delayed-completion true
+              :effect (req (show-wait-prompt state :runner "Corp to place advancement tokens")
+                           (let [p (inc (get-agenda-points state :corp target))]
+                             (continue-ability state side
+                               {:prompt "Choose a card to place advancement tokens on with Jemison Astronautics: Sacrifice. Audacity. Success."
+                                :choices {:req #(and (installed? %) (= (:side %) "Corp"))}
+                                :msg (msg "place " p " advancement tokens on " (card-str state target))
+                                :cancel-effect (effect (clear-wait-prompt :runner))
+                                :effect (effect (add-prop :corp target :advance-counter p {:placed true})
+                                                (clear-wait-prompt :runner))}
+                              card nil)))}}}
 
    "Jesminder Sareen: Girl Behind the Curtain"
    {:events {:pre-tag {:once :per-run
@@ -462,8 +507,17 @@
       :events {:agenda-scored leela
                :agenda-stolen leela}})
 
+   "Los: Data Hijacker"
+   {:events {:rez {:once :per-turn
+                   :req (req (ice? target))
+                   :msg "gain 2 [Credits]"
+                   :effect (effect (gain :runner :credit 2))}}}
+
    "MaxX: Maximum Punk Rock"
-   (let [ability {:msg "trash the top 2 cards from Stack and draw 1 card"
+   (let [ability {:msg (msg (let [deck (:deck runner)]
+                              (if (pos? (count deck))
+                                (str "trash " (join ", " (map :title (take 2 deck))) " from their Stack and draw 1 card")
+                                "trash the top 2 cards from their Stack and draw 1 card - but their Stack is empty")))
                   :once :per-turn
                   :effect (effect (mill 2) (draw))}]
      {:flags {:runner-turn-draw true
@@ -490,13 +544,16 @@
                                   (swap! state update-in [:bonus] dissoc :cost))))}]}
 
    "NBN: Controlling the Message"
-   {:events {:runner-trash
+   (let [cleanup (effect (update! :corp (dissoc card :saw-trash)))]
+   {:events {:corp-turn-ends {:effect cleanup}
+             :runner-turn-ends {:effect cleanup}
+             :runner-trash
              {:delayed-completion true
-              :req (req (and (let [trashes (flatten (turn-events state side :runner-trash))]
-                               (empty? (filter #(card-is? % :side :corp) trashes)))
+              :req (req (and (not (:saw-trash card))
                              (card-is? target :side :corp)
                              (installed? target)))
               :effect (req (show-wait-prompt state :runner "Corp to use NBN: Controlling the Message")
+                           (update! state :corp (assoc card :saw-trash true))
                            (continue-ability
                              state :corp
                              {:optional
@@ -508,7 +565,7 @@
                                                                      (clear-wait-prompt :runner))
                                                      :unsuccessful {:effect (effect (clear-wait-prompt :runner))}}}
                                :no-ability {:effect (effect (clear-wait-prompt :runner))}}}
-                             card nil))}}}
+                             card nil))}}})
 
    "NBN: Making News"
    {:recurring 2}

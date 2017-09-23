@@ -884,6 +884,41 @@
       (is (= 1 (:credit (get-corp))) "Spent 4 credits")
       (is (= 4 (:advance-counter (refresh pj))) "Junebug has 4 advancements"))))
 
+(deftest psychokinesis
+  ;; Pyschokinesis - Terminal Event (end the turn); Look at R&D, install an Asset, Agenda, or Upgrade in a Remote Server
+  (do-game
+    (new-game (default-corp [(qty "Psychokinesis" 3) (qty "Caprice Nisei" 1) (qty "Adonis Campaign" 1) 
+                              (qty "Global Food Initiative" 1)])
+              (default-runner))
+    (starting-hand state :corp ["Psychokinesis","Psychokinesis","Psychokinesis"])
+    ;; Test installing an Upgrade
+    (play-from-hand state :corp "Psychokinesis")
+    (prompt-choice :corp (find-card "Caprice Nisei" (:deck (get-corp))))
+    (prompt-choice :corp "New remote")
+    (is (= "Caprice Nisei" (:title (get-content state :remote1 0)))
+      "Caprice Nisei installed by Psychokinesis")
+    ;; Test installing an Asset
+    (core/gain state :corp :click 1)
+    (play-from-hand state :corp "Psychokinesis")
+    (prompt-choice :corp (find-card "Adonis Campaign" (:deck (get-corp))))
+    (prompt-choice :corp "New remote")
+    (is (= "Adonis Campaign" (:title (get-content state :remote2 0)))
+      "Adonis Campaign installed by Psychokinesis")
+    ;; Test installing an Agenda
+    (core/gain state :corp :click 1)
+    (play-from-hand state :corp "Psychokinesis")
+    (prompt-choice :corp (find-card "Global Food Initiative" (:deck (get-corp))))
+    (prompt-choice :corp "New remote")
+    (is (= "Global Food Initiative" (:title (get-content state :remote3 0)))
+      "Global Food Initiative installed by Psychokinesis")
+    ;; Test selecting "None"
+    (core/gain state :corp :click 1)
+    (core/move state :corp (find-card "Psychokinesis" (:discard (get-corp))) :hand)
+    (play-from-hand state :corp "Psychokinesis")
+    (prompt-choice :corp "None")
+    (is (= nil (:title (get-content state :remote4 0)))
+      "Nothing is installed by Psychokinesis")))
+
 (deftest punitive-counterstrike
   ;; Punitive Counterstrike - deal meat damage equal to printed agenda points
   (do-game
@@ -1340,12 +1375,14 @@
                              (qty "Vanilla" 1)
                              (qty "Wetwork Refit" 3)])
               (default-runner))
+    (core/gain state :corp :credit 20)
+    (core/gain state :corp :click 10)
     (play-from-hand state :corp "Eli 1.0" "R&D")
     (play-from-hand state :corp "Vanilla" "HQ")
     (let [eli (get-ice state :rd 0)
           vanilla (get-ice state :hq 0)]
       (play-from-hand state :corp "Wetwork Refit")
-      (is (not-any? #{"Eli 1.0"} (get-in @state [:runner :prompt :choices]))
+      (is (not-any? #{"Eli 1.0"} (get-in @state [:corp :prompt :choices]))
           "Unrezzed Eli 1.0 is not a choice to host Wetwork Refit")
       (prompt-choice :corp "Done")
 

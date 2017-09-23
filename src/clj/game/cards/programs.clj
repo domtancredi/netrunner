@@ -113,6 +113,33 @@
                  :msg (msg "derez " (:title current-ice))
                  :effect (effect (trash card {:cause :ability-cost}) (derez current-ice))}]}
 
+   "Customized Secretary"
+   (letfn [(custsec-host [cards]
+             {:prompt "Choose a program to host on Customized Secretary"
+              :choices (cons "None" cards)
+              :delayed-completion true
+              :effect (req (if (or (= target "None") (not (is-type? target "Program")))
+                             (do (clear-wait-prompt state :corp)
+                                 (shuffle! state side :deck)
+                                 (system-msg state side (str "shuffles their Stack"))
+                                 (effect-completed state side eid card))
+                             (do (host state side (get-card state card) target)
+                                 (system-msg state side (str "hosts " (:title target) " on Customized Secretary"))
+                                 (continue-ability state side (custsec-host (remove-once #(not= % target) cards))
+                                                   card nil))))})]
+     {:delayed-completion true
+      :msg (msg "reveal the top 5 cards of their Stack: " (join ", " (map :title (take 5 (:deck runner)))))
+      :effect (req (show-wait-prompt state :corp "Runner to host programs on Customized Secretary")
+                   (let [from (take 5 (:deck runner))]
+                     (continue-ability state side (custsec-host from) card nil)))
+      :abilities [{:cost [:click 1]
+                   :prompt "Choose a program hosted on Customized Secretary to install"
+                   :choices (req (cancellable (filter #(can-pay? state side nil :credit (:cost %))
+                                                      (:hosted card))))
+                   :msg (msg "install " (:title target))
+                   :effect (req (when (can-pay? state side nil :credit (:cost target))
+                                  (runner-install state side target)))}]})
+
    "D4v1d"
    {:implementation "Does not check that ICE strength is 5 or greater"
     :data {:counter {:power 3}}
@@ -129,6 +156,7 @@
                                           :choices {:req #(and (<= (:cost %) (get-in c [:counter :power] 0))
                                                                (#{"Hardware" "Program" "Resource"} (:type %))
                                                                (in-hand? %))}
+                                          :req (req (not (install-locked? state side)))
                                           :msg (msg "install " (:title target) " at no cost")
                                           :effect (effect (trash card {:cause :ability-cost})
                                                           (runner-install target {:no-cost true}))}
@@ -406,11 +434,15 @@
                           :effect (effect (update! (assoc card
                                                           :hosted-programs (remove #(= (:cid target) %) (:hosted-programs card))))
                                           (lose :memory (:memoryunits target)))}}}
-
    "LLDS Energy Regulator"
    {:prevent {:trash [:hardware]}
-    :abilities [{:cost [:credit 3] :msg "prevent a hardware from being trashed"}
-                {:effect (effect (trash card {:cause :ability-cost})) :msg "prevent a hardware from being trashed"}]}
+    :abilities [{:cost [:credit 3]
+                 :msg "prevent a hardware from being trashed"
+                 :effect (effect (trash-prevent :hardware 1))}
+                {:label "[Trash]: Prevent a hardware from being trashed"
+                 :msg "prevent a hardware from being trashed"
+                 :effect (effect (trash-prevent :hardware 1)
+                                 (trash card {:cause :ability-cost}))}]}
 
    "Magnum Opus"
    {:abilities [{:cost [:click 1] :effect (effect (gain :credit 2)) :msg "gain 2 [Credits]"}]}
@@ -595,7 +627,9 @@
                                           (lose :memory (:memoryunits target)))}}}
 
    "Reaver"
-   {:events {:runner-trash {:req (req (and (first-event? state :runner :runner-trash) (installed? target)))
+   {:events {:runner-trash {:req (req (if (= :runner (:active-player @state))
+                                        (and (= 1 (get-in @state [:runner :register :trashed-installed-runner])) (installed? target))
+                                        (and (= 1 (get-in @state [:runner :register :trashed-installed-corp])) (installed? target))))
                             :effect (effect (draw :runner 1))
                             :msg "draw 1 card"}}}
 
@@ -629,6 +663,7 @@
    "Savoir-faire"
    {:abilities [{:cost [:credit 2]
                  :once :per-turn
+                 :req (req (not (install-locked? state side)))
                  :msg (msg "install " (:title target))
                  :prompt "Choose a program to install from your grip"
                  :choices {:req #(and (is-type? % "Program")
@@ -655,19 +690,24 @@
                                 (gain state side :credit 1)))}]}
 
    "Self-modifying Code"
-   {:abilities [{:prompt "Choose a program to install"
-                 :msg (req (if (not= target "No install")
-                             (str "install " (:title target))
-                             (str "shuffle their Stack")))
-                 :priority true
-                 :choices (req (cancellable
-                                 (conj (vec (sort-by :title (filter #(is-type? % "Program") (:deck runner))))
-                                       "No install")))
-                 :cost [:credit 2]
-                 :effect (req (trigger-event state side :searched-stack nil)
-                              (trash state side card {:cause :ability-cost})
-                              (shuffle! state side :deck)
-                              (when (not= target "No install") (runner-install state side target)))}]}
+   {:abilities  [{:req (req (not (install-locked? state side)))
+                  :effect (req (when-completed (trash state side card {:cause :ability-cost})
+                                               (continue-ability state side
+                                                                  {:prompt "Choose a program to install"
+                                                                   :msg (req (if (not= target "No install")
+                                                                               (str "install " (:title target))
+                                                                               (str "shuffle their Stack")))
+                                                                   :priority true
+                                                                   :choices (req (cancellable
+                                                                                   (conj (vec (sort-by :title (filter #(is-type? % "Program")
+                                                                                                                      (:deck runner))))
+                                                                                         "No install")))
+                                                                   :cost [:credit 2]
+                                                                   :effect (req (trigger-event state side :searched-stack nil)
+                                                                                (trash state side card {:cause :ability-cost})
+                                                                                (shuffle! state side :deck)
+                                                                                (when (not= target "No install")
+                                                                                  (runner-install state side target)))} card nil)))}]}
 
    "Sneakdoor Beta"
    {:abilities [{:cost [:click 1]

@@ -9,6 +9,7 @@
     {:successful-run
      {:delayed-completion true
       :req (req (and (= target :archives)
+                     (not= (:max-access run) 0)
                      (not-empty (:discard corp))))
       :effect (effect (continue-ability
                         {:optional
@@ -143,7 +144,8 @@
    "Clone Chip"
    {:abilities [{:prompt "Choose a program to install from your Heap" :msg (msg "install " (:title target))
                  :priority true :show-discard true
-                 :req (req (not (seq (get-in @state [:runner :locked :discard]))))
+                 :req (req (and (not (seq (get-in @state [:runner :locked :discard])))
+                               (not (install-locked? state side))))
                  :choices {:req #(and (is-type? % "Program")
                                       (= (:zone %) [:discard]))}
                  :effect (effect (trash card {:cause :ability-cost}) (runner-install target))}]}
@@ -389,6 +391,18 @@
                               (shuffle! :deck)
                               (move target :hand))}}}
 
+   "Maw"
+   (let [manual {:optional
+                 {:label "Trash a card from HQ"
+                  :req (req (not (used-this-turn? (:cid card) state)))
+                  :prompt "Use Maw to trash a card from HQ?"
+                  :yes-ability {:msg "force the Corp to trash a random card from HQ"
+                                :once :per-turn
+                                :effect (req (trash state :corp (first (shuffle (:hand corp)))))}}}]
+     {:in-play [:memory 2]
+      :implementation "Manual - click card to fire the trash"
+      :abilities [manual]})
+
    "Maya"
    {:in-play [:memory 2]
     :abilities [{:once :per-turn
@@ -568,9 +582,10 @@
    {:recurring 1}
 
    "Q-Coherence Chip"
-   {:effect (effect (gain :memory 1)) :leave-play (effect (lose :memory 1))
-    :events (let [e {:msg "trash itself" :req (req (= (last (:zone target)) :program))
-                     :effect (effect (trash card))}]
+   {:in-play [:memory 1]
+    :events (let [e {:req (req (= (last (:zone target)) :program))
+                     :effect (effect (trash card)
+                                     (system-msg (str "trashes Q-Coherence Chip")))}]
               {:runner-trash e :corp-trash e})}
 
    "Qianju PT"
@@ -611,11 +626,29 @@
                                   {:prompt "Choose how much damage to prevent"
                                    :priority 50
                                    :choices {:number (req (min n (count (:deck runner))))}
-                                   :msg (msg "trash " target " cards from their Stack and prevent " target " damage")
+                                   :msg (msg "trash " (join ", " (map :title (take target (:deck runner))))
+                                             " from their Stack and prevent " target " damage")
                                    :effect (effect (damage-prevent :net target)
                                                    (damage-prevent :brain target)
                                                    (mill :runner target)
                                                    (trash card {:cause :ability-cost}))} card nil)))}]}
+
+   "Recon Drone"
+   ; eventmap uses reverse so we get the most recent event of each kind into map
+   (let [eventmap (fn [s] (into {} (reverse (get s :turn-events))))]
+     {:abilities [{:req (req (and (true? (:access @state)) (= (:cid (second (:pre-damage (eventmap @state))))
+                                                              (:cid (first (:post-access-card (eventmap @state)))))))
+                :effect (effect (resolve-ability
+                                  {:prompt "Choose how much damage to prevent"
+                                   :priority 50
+                                   :choices {:number (req (min (last (:pre-damage (eventmap @state)))
+                                                               (:credit runner)))}
+                                   :msg (msg "prevent " target " damage")
+                                   :effect (effect (damage-prevent (first (:pre-damage (eventmap @state))) target)
+                                                   (lose :credit target)
+                                                   (trash card {:cause :ability-cost}))} card nil))}]
+     :events    {:pre-access {:effect (req (doseq [dtype [:net :brain :meat]] (swap! state update-in [:prevent :damage dtype] #(conj % card))))}
+                 :run-ends   {:effect (req (doseq [dtype [:net :brain :meat]] (swap! state update-in [:prevent :damage dtype] #(drop 1 %))))}}})
 
    "Record Reconstructor"
    {:events
@@ -680,9 +713,31 @@
                          :effect (effect (tag-runner :runner eid 1) (end-run))
                          :unsuccessful {:msg "bypass the current ICE"}}}]}
 
+   "Severnius Stim Implant"
+   {:abilities [{:cost [:click 1]
+                 :prompt "Choose a server to run with Severnius Stim Implant" :choices ["HQ" "R&D"]
+                 :effect (req (let [n (count (:hand runner))
+                                    srv target]
+                                (resolve-ability state side
+                                  {:prompt "Choose at least 2 cards in your Grip to trash with Severnius Stim Implant"
+                                   :choices {:max n :req #(and (= (:side %) "Runner") (in-hand? %))}
+                                   :msg (msg "trash " (count targets) " card" (if (not= 1 (count targets)) "s")
+                                             " and access " (quot (count targets) 2) " additional cards")
+                                   :effect (req (let [bonus (quot (count targets) 2)]
+                                                   (trash-cards state side targets)
+                                                   (game.core/run state side srv nil card)
+                                                   (register-events state side
+                                                     {:successful-run
+                                                      {:silent (req true)
+                                                       :effect (effect (access-bonus bonus))}
+                                                      :run-ends {:effect (effect (unregister-events card))}} card)))}
+                                 card nil)))}]
+    :events {:successful-run nil :run-ends nil}}
+
    "Şifr"
    {:in-play [:memory 2]
     :abilities [{:once :per-turn
+                 :req (req (rezzed? current-ice))
                  :msg (msg "lower their maximum hand size by 1 and lower the strength of " (:title current-ice) " to 0")
                  :effect (effect (lose :runner :hand-size-modification 1)
                                  (update! (assoc card :sifr-target current-ice :sifr-used true))
@@ -780,11 +835,11 @@
                                      (doseq [c targets]
                                        (trash state side c {:cause dtype :unpreventable true}))
                                      (trigger-event state side :damage-chosen)
-                                     (damage-defer state side :meat 0)
+                                     (damage-defer state side dtype 0)
                                      (effect-completed state side eid card))}
                       card nil)
                       (trigger-event state side :damage dtype nil)))}
-     :damage-chosen {:effect (effect (enable-runner-damage-choice))}}
+    :damage-chosen {:effect (effect (enable-runner-damage-choice))}}
     :delayed-completion true
     :effect (effect (enable-runner-damage-choice)
                     (system-msg (str "suffers 2 meat damage from installing Titanium Ribs"))
@@ -797,7 +852,8 @@
               :mandatory true
               :prompt "Which card from the top of R&D would you like to access? (Card 1 is on top.)"
               :choices (take n ["1" "2" "3" "4" "5"])
-              :effect (effect (handle-access eid [(nth (:deck corp) (dec (Integer/parseInt target)))]))})]
+              :effect (effect (system-msg (str "accesses the card at position " (Integer/parseInt target) " of R&D"))
+                              (handle-access eid [(nth (:deck corp) (dec (Integer/parseInt target)))]))})]
      {:events {:successful-run
                {:req (req (= target :rd))
                 :interactive (req true)
@@ -831,6 +887,20 @@
                                                            (effect-completed state side eid card)))}
                                            card targets))}}}
                             card targets)))}}}
+
+   "Ubax"
+   (let [ability {:req (req (:runner-phase-12 @state))
+                  :msg "draw 1 card"
+                  :label "Draw 1 card (start of turn)"
+                  :once :per-turn
+                  :effect (effect (draw 1))}]
+     {:in-play [:memory 1]
+      :flags {:runner-turn-draw true
+              :runner-phase-12 (req (< 1 (count (filter #(card-flag? % :runner-turn-draw true)
+                                                        (cons (get-in @state [:runner :identity])
+                                                              (all-installed state :runner))))))}
+      :events {:runner-turn-begins ability}
+      :abilities [ability]})
 
    "Unregistered S&W 35"
    {:abilities

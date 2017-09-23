@@ -478,6 +478,28 @@
       (is (= 1 (count (:scored (get-runner)))) "Agenda added to runner scored")
       (is (= 3 (count (:hand (get-runner)))) "No damage dealt"))))
 
+(deftest film-critic-hostile-infrastructure
+  ;; Do not take a net damage when a hosted agenda is trashed due to film critic trash #2382
+  (do-game
+    (new-game (default-corp [(qty "Hostile Infrastructure" 3) (qty "Project Vitruvius" 1)])
+              (default-runner [(qty "Film Critic" 1) (qty "Sure Gamble" 3)]))
+    (play-from-hand state :corp "Hostile Infrastructure" "New remote")
+    (play-from-hand state :corp "Project Vitruvius" "New remote")
+    (core/rez state :corp (get-content state :remote1 0))
+    (take-credits state :corp)
+    (play-from-hand state :runner "Film Critic")
+    (let [fc (first (get-in @state [:runner :rig :resource]))]
+      (run-empty-server state :remote2)
+      (card-ability state :runner fc 0)
+      (is (= 1 (count (:hosted (refresh fc)))) "Agenda hosted on FC")
+      (take-credits state :runner)
+      (core/gain state :corp :credit 10)
+      (core/trash-resource state :corp nil)
+      (prompt-select :corp fc)
+      (is (= 1 (count (:discard (get-runner)))) "FC trashed")
+      (is (= 1 (count (:discard (get-corp)))) "Agenda trashed")
+      (is (= 3 (count (:hand (get-runner)))) "No damage dealt"))))
+
 (deftest gang-sign
   ;; Gang Sign - accessing from HQ, not including root. Issue #2113.
   (do-game
@@ -623,14 +645,18 @@
 (deftest john-masanori
   ;; John Masanori - Draw 1 card on first successful run, take 1 tag on first unsuccessful run
   (do-game
-    (new-game (default-corp)
+    (new-game (default-corp [(qty "Crisium Grid" 1)])
               (default-runner [(qty "John Masanori" 3)
                                (qty "Sure Gamble" 3)
                                (qty "Fall Guy" 1)]))
+    (play-from-hand state :corp "Crisium Grid" "HQ")
+    (core/rez state :corp (get-content state :hq 0))
     (take-credits state :corp)
-    (core/gain state :runner :click 1)
+    (core/gain state :runner :click 2)
     (play-from-hand state :runner "John Masanori")
     (is (= 4 (count (:hand (get-runner)))))
+    (run-empty-server state "HQ")
+    (prompt-choice :runner "Yes") ; trash crisium #2433
     (run-empty-server state "Archives")
     (is (= 5 (count (:hand (get-runner)))) "1 card drawn from first successful run")
     (run-empty-server state "Archives")
@@ -804,6 +830,21 @@
       (run-on state :hq)
       (card-ability state :runner nm 0)
       (is (= "Net Mercur" (:title (:card (first (get-in @state [:runner :prompt]))))) "Net Mercur triggers itself"))))
+
+(deftest network-exchange
+  ;; ICE install costs 1 more except for inner most
+  (do-game
+    (new-game (default-corp [(qty "Paper Wall" 3)])
+              (default-runner [(qty "Network Exchange" 1)]))
+    (take-credits state :corp)
+    (play-from-hand state :runner "Network Exchange")
+    (take-credits state :runner)
+    (play-from-hand state :corp "Paper Wall" "HQ")
+    (is (= 8 (:credit (get-corp))) "Paid 0 to install Paper Wall")
+    (play-from-hand state :corp "Paper Wall" "HQ")
+    (is (= 6 (:credit (get-corp))) "Paid 1 extra  to install Paper Wall")
+    (play-from-hand state :corp "Paper Wall" "HQ")
+    (is (= 3 (:credit (get-corp))) "Paid 1 extra  to install Paper Wall")))
 
 (deftest new-angeles-city-hall
   ;; New Angeles City Hall - Avoid tags; trash when agenda is stolen
@@ -995,6 +1036,8 @@
     (is (= "Corroder" (:title (second (rest (rest (:deck (get-runner))))))))
     (is (= "Patron" (:title (second (rest (rest (rest (:deck (get-runner)))))))))
     (core/trash state :runner (get-resource state 0))
+    (is (last-log-contains? state "Sure Gamble, Desperado, Diesel")
+        "Rolodex did log trashed card names")
     (is (= 4 (count (:discard (get-runner)))) "Rolodex mills 3 cards when trashed")
     (is (= "Corroder" (:title (first (:deck (get-runner))))))))
 
@@ -1262,6 +1305,26 @@
           "Corroder was installed")
       (is (= 3 (:memory (get-runner))) "Corroder cost 1 mu"))))
 
+(deftest street-peddler-muertos-brain-chip
+  ;; Muertos/Brain Chip uninstall effect not fired when removed off peddler/hosting Issue #2294+#2358
+  (do-game
+    (new-game (default-corp [(qty "Jackson Howard" 1)])
+              (default-runner [(qty "Street Peddler" 2)(qty "Muertos Gang Member" 1) (qty "Brain Chip" 1)]))
+    (core/move state :runner (find-card "Muertos Gang Member" (:hand (get-runner))) :deck {:front true})
+    (core/move state :runner (find-card "Brain Chip" (:hand (get-runner))) :deck {:front true})
+    (core/move state :runner (find-card "Street Peddler" (:hand (get-runner))) :deck {:front true})
+    (play-from-hand state :corp "Jackson Howard" "New remote")
+    (take-credits state :corp)
+    (play-from-hand state :runner "Street Peddler")
+    (core/gain state :runner :agenda-point 1)
+    (let [jh (get-content state :remote1 0)
+          sp (get-in @state [:runner :rig :resource 0])]
+      (core/rez state :corp jh)
+      (card-ability state :runner sp 0)
+      (prompt-card :runner (find-card "Street Peddler" (:hosted sp))) ; choose to another Peddler
+      (is (empty? (:prompt (get-corp))) "Corp not prompted to rez Jackson")
+      (is (= 4 (:memory (get-runner))) "Runner has 4 MU"))))
+
 (deftest street-peddler-in-play-effects
   ;; Street Peddler - Trashing hardware should not reduce :in-play values
   (do-game
@@ -1515,6 +1578,29 @@
       (is (= 0 (:credit (get-runner))) "Kate discount applied")
       (is (= 1 (count (get-in @state [:runner :rig :resource]))) "Plascrete installed"))))
 
+(deftest the-supplier-trashed
+  ;; Issue #2358 Brain chip mem is deducted when it is hosted and Supplier is trashed
+  (do-game
+    (new-game (default-corp [(qty "Hostile Takeover" 2)])
+              (default-runner [(qty "The Supplier" 1)
+                               (qty "Brain Chip" 1)]))
+    (play-from-hand state :corp "Hostile Takeover" "New remote")
+    (take-credits state :corp)
+    (is (= 4 (:memory (get-runner))) "Runner has 4 MU")
+    (play-from-hand state :runner "The Supplier")
+    (let [ts (get-resource state 0)]
+      (card-ability state :runner ts 0)
+      (prompt-select :runner (find-card "Brain Chip" (:hand (get-runner))))
+      (is (= 4 (:memory (get-runner))) "Runner has 4 MU")
+      (run-empty-server state "Server 1")
+      (prompt-choice :runner "Steal")
+      (take-credits state :runner)
+      (core/gain state :runner :tag 1)
+      (core/trash-resource state :corp nil)
+      (prompt-select :corp (get-resource state 0))
+      (is (= 2 (count (:discard (get-runner)))))
+      (is (= 4 (:memory (get-runner))) "Runner has 4 MU"))))
+
 (deftest tech-trader
   ;; Basic test
   (do-game
@@ -1654,22 +1740,30 @@
   ;; Wasteland - Gain 1c the first time you trash an installed card each turn
   (do-game
     (new-game (default-corp)
-              (default-runner [(qty "Wasteland" 1) (qty "Fall Guy" 3)]))
+              (default-runner [(qty "Wasteland" 1) (qty "Faust" 1) (qty "Fall Guy" 4)]))
     (take-credits state :corp)
+    (core/gain state :runner :click 1)
+    (core/draw state :runner)
+    (play-from-hand state :runner "Faust")
     (play-from-hand state :runner "Wasteland")
+    ; trash from hand first which should not trigger #2291
+    (let [faust (get-in @state [:runner :rig :program 0])]
+      (card-ability state :runner faust 1)
+      (prompt-card :runner (first (:hand (get-runner)))))
+    (is (= 0 (:credit (get-runner))) "Gained nothing from Wasteland")
     (play-from-hand state :runner "Fall Guy")
     (play-from-hand state :runner "Fall Guy")
     (play-from-hand state :runner "Fall Guy")
     (card-ability state :runner (get-resource state 1) 1)
     (is (= 1 (count (:discard (get-runner)))) "Fall Guy trashed")
-    (is (= 6 (:credit (get-runner))) "Gained 2c from Fall Guy and 1c from Wasteland")
+    (is (= 3 (:credit (get-runner))) "Gained 2c from Fall Guy and 1c from Wasteland")
     (take-credits state :runner)
     (card-ability state :runner (get-resource state 1) 1)
     (is (= 2 (count (:discard (get-runner)))) "Fall Guy trashed")
-    (is (= 9 (:credit (get-runner))) "Gained 2c from Fall Guy and 1c from Wasteland")
+    (is (= 6 (:credit (get-runner))) "Gained 2c from Fall Guy and 1c from Wasteland")
     (card-ability state :runner (get-resource state 1) 1)
     (is (= 3 (count (:discard (get-runner)))) "Fall Guy trashed")
-    (is (= 11 (:credit (get-runner))) "Gained 2c from Fall Guy but no credits from Wasteland")))
+    (is (= 8 (:credit (get-runner))) "Gained 2c from Fall Guy but no credits from Wasteland")))
 
 (deftest xanadu
   ;; Xanadu - Increase all ICE rez cost by 1 credit

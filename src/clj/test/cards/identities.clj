@@ -216,6 +216,30 @@
     (run-empty-server state :hq)
     (is (= 7 (:credit (get-runner))) "No credits gained")))
 
+(deftest gagarin
+  ;; Gagarin - pay 1c to access each card in remote
+  (do-game
+    (new-game
+      (make-deck "Gagarin Deep Space: Expanding the Horizon" [(qty "PAD Campaign" 1) (qty "Caprice Nisei" 1)])
+      (default-runner))
+    (core/lose state :runner :credit 4)
+    (is (= 1 (:credit (get-runner))) "Runner has 1 credit")
+    (play-from-hand state :corp "PAD Campaign" "New remote")
+    (take-credits state :corp)
+    (run-empty-server state :remote1)
+    (prompt-select :runner (get-content state :remote1 0))
+    (is (= 0 (:credit (get-runner))) "Paid 1 credit to access")
+    (prompt-choice :runner "No") ; Dismiss trash prompt
+    (is (last-log-contains? state "PAD Campaign") "Accessed card name was logged")
+    (run-empty-server state :remote1)
+    (prompt-select :runner (get-content state :remote1 0))
+    (prompt-choice :runner "OK") ; Could not afford message dismissed
+    (is (empty? (:prompt (get-runner))) "Runner cannot access so no trash prompt")
+    (is (not (last-log-contains? state "PAD Campaign")) "No card name was logged")
+    (run-empty-server state :hq)
+    (prompt-choice :runner "No") ; Dismiss trash prompt
+    (is (last-log-contains? state "Caprice") "Accessed card name was logged")))
+
 (deftest grndl-power-unleashed
   ;; GRNDL: Power Unleashed - start game with 10 credits and 1 bad pub.
   (do-game
@@ -279,12 +303,16 @@
   ;; Architects of Tomorrow - prompt to rez after passing bioroid
   (do-game
     (new-game
-      (make-deck "Haas-Bioroid: Architects of Tomorrow" [(qty "Eli 1.0" 3)])
+      (make-deck "Haas-Bioroid: Architects of Tomorrow" [(qty "Eli 1.0" 2) (qty "Pup" 1)])
       (default-runner))
+    (core/gain state :corp :credit 3)
     (play-from-hand state :corp "Eli 1.0" "Archives")
+    (play-from-hand state :corp "Pup" "Archives")
     (play-from-hand state :corp "Eli 1.0" "HQ")
     (take-credits state :corp)
     (run-on state "Archives")
+    (core/rez state :corp (get-ice state :archives 1))
+    (run-continue state)
     (core/rez state :corp (get-ice state :archives 0))
     (is (= 3 (:credit (get-corp))) "Corp has 3 credits after rezzing Eli 1.0")
     (run-continue state)
@@ -355,6 +383,32 @@
       (take-credits state :corp)
       (run-empty-server state "Server 1")
       (is (= 8 (core/trash-cost state :runner (refresh pad)))))))
+
+(deftest jemison-astronautics
+  ;; Jemison Astronautics - Place advancements when forfeiting agendas
+  (do-game
+    (new-game
+      (make-deck "Jemison Astronautics: Sacrifice. Audacity. Success." [(qty "Enforcer 1.0" 1) (qty "Hostile Takeover" 1)
+                                                                        (qty "Ice Wall" 1) (qty "Global Food Initiative" 1)])
+      (default-runner [(qty "Data Dealer" 1)]))
+    (play-from-hand state :corp "Enforcer 1.0" "HQ")
+    (play-from-hand state :corp "Ice Wall" "R&D")
+    (play-from-hand state :corp "Hostile Takeover" "New remote")
+    (let [enf (get-ice state :hq 0)
+          iwall (get-ice state :rd 0)]
+      (take-credits state :corp)
+      (play-from-hand state :runner "Data Dealer")
+      (run-empty-server state "Server 1")
+      (prompt-choice :runner "Steal")
+      (let [dd (get-resource state 0)]
+        (card-ability state :runner dd 0)
+        (is (empty? (:prompt (get-corp))) "No Jemison prompt for Runner forfeit")
+        (take-credits state :runner)
+        (play-from-hand state :corp "Global Food Initiative" "New remote")
+        (score-agenda state :corp (get-content state :remote2 0))
+        (core/rez state :corp enf)
+        (prompt-select :corp iwall)
+        (is (= 4 (:advance-counter (refresh iwall))) "Jemison placed 4 advancements")))))
 
 (deftest jesminder-sareen-ability
   ;; Jesminder Sareen - avoid tags only during a run
@@ -606,6 +660,17 @@
     (is (not (get-content state :archives 0)) "Upgrade returned to hand")
     (is (not (:run @state)) "Run ended, no more accesses")))
 
+(deftest maxx
+  (do-game
+    (new-game (default-corp)
+              (make-deck "MaxX: Maximum Punk Rock" [(qty "Wyldside" 3)
+                                                    (qty "Eater" 1)]))
+    (starting-hand state :runner ["Eater"])
+    (take-credits state :corp)
+    (is (= 2 (count (:discard (get-runner)))) "MaxX discarded 2 cards at start of turn")
+    (is (last-log-contains? state "Wyldside, Wyldside")
+        "Maxx did log trashed card names")))
+
 (deftest maxx-wyldside-start-of-turn
   ;; MaxX and Wyldside - using Wyldside during Step 1.2 should lose 1 click
   (do-game
@@ -674,12 +739,15 @@
   ;; NBN: Controlling the Message - Trace to tag Runner when first installed Corp card is trashed
   (do-game
     (new-game
-      (make-deck "NBN: Controlling the Message" [(qty "Launch Campaign" 2)])
+      (make-deck "NBN: Controlling the Message" [(qty "Launch Campaign" 3)])
       (default-runner [(qty "Forger" 1)]))
     (play-from-hand state :corp "Launch Campaign" "New remote")
     (play-from-hand state :corp "Launch Campaign" "New remote")
     (take-credits state :corp)
     (play-from-hand state :runner "Forger")
+    ; trash from HQ first - #2321
+    (run-empty-server state "HQ")
+    (prompt-choice :runner "Yes")
     (run-empty-server state "Server 1")
     (prompt-choice :runner "Yes")
     (prompt-choice :corp "Yes")

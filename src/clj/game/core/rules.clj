@@ -1,7 +1,7 @@
 (in-ns 'game.core)
 
-(declare card-init card-str close-access-prompt enforce-msg gain-agenda-point get-agenda-points is-type? in-corp-scored?
-         prevent-draw resolve-steal-events make-result say show-prompt system-msg trash-cards untrashable-while-rezzed?
+(declare card-init card-str close-access-prompt enforce-msg gain-agenda-point get-agenda-points installed? is-type?
+         in-corp-scored? prevent-draw resolve-steal-events make-result say show-prompt system-msg trash-cards untrashable-while-rezzed?
          update-all-ice win win-decked play-sfx)
 
 ;;;; Functions for applying core Netrunner game rules.
@@ -36,7 +36,7 @@
                           (get-in @state [side :register :spent-click])))) ; if priority, have not spent a click
          (if-let [cost-str (pay state side card :credit (if ignore-cost 0 (:cost card)) extra-cost
                                 (when-not (or ignore-cost no-additional-cost)
-                                  additional-cost))]
+                                  additional-cost) {:action :play-instant})]
            (let [c (move state side (assoc card :seen true) :play-area)]
              (system-msg state side (str (if ignore-cost
                                            "play "
@@ -243,7 +243,8 @@
       (max 0)))
 
 (defn tag-prevent [state side n]
-  (swap! state update-in [:tag :tag-prevent] (fnil #(+ % n) 0)))
+  (swap! state update-in [:tag :tag-prevent] (fnil #(+ % n) 0))
+  (trigger-event state side (if (= side :corp) :corp-prevent :runner-prevent) `(:tag ~n)))
 
 (defn tag-remove-bonus
   "Applies a cost increase of n to removing tags with the click action. (SYNC.)"
@@ -310,6 +311,9 @@
 (defn- resolve-trash
   [state side eid {:keys [zone type] :as card}
    {:keys [unpreventable cause keep-server-alive suppress-event] :as args} & targets]
+  (when (installed? card)
+    (if (= :runner (:active-player @state)) (swap! state update-in [side :register :trashed-installed-runner] (fnil inc 0))
+                                            (swap! state update-in [side :register :trashed-installed-corp] (fnil inc 0))))
   (if (and (not suppress-event) (not= (last zone) :current)) ; Trashing a current does not trigger a trash event.
     (when-completed (apply trigger-event-sync state side (keyword (str (name side) "-trash")) card cause targets)
                     (apply resolve-trash-end state side eid card args targets))
@@ -427,12 +431,15 @@
 
 (defn forfeit
   "Forfeits the given agenda to the :rfg zone."
-  [state side card]
-  (let [c (if (in-corp-scored? state side card)
-            (deactivate state side card) card)]
-    (system-msg state side (str "forfeits " (:title c)))
-    (gain-agenda-point state side (- (get-agenda-points state side c)))
-    (move state :corp c :rfg)))
+  ([state side card] (forfeit state side (make-eid state) card))
+  ([state side eid card]
+   (let [c (if (in-corp-scored? state side card)
+             (deactivate state side card) card)]
+     (system-msg state side (str "forfeits " (:title c)))
+     (gain-agenda-point state side (- (get-agenda-points state side c)))
+     (move state :corp c :rfg)
+     (when-completed (trigger-event-sync state side (keyword (str (name side) "-forfeit-agenda")) c)
+                     (effect-completed state side eid)))))
 
 (defn gain-agenda-point
   "Gain n agenda points and check for winner."
