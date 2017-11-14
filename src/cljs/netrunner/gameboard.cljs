@@ -130,6 +130,9 @@
 (defn not-spectator? [game-state app-state]
   (#{(get-in @game-state [:corp :user]) (get-in @game-state [:runner :user])} (:user @app-state)))
 
+(defn log [& args]
+  (.apply js/console.log js/console (to-array args)))
+
 (defn send-command
   ([command] (send-command command nil))
   ([command {:keys [no-lock] :as args}]
@@ -378,6 +381,7 @@
         splitted (.split with-image-codes (js/RegExp. (str "(" ci-open "[^" ci-close "]*" ci-close ")") "g"))
         oldstyle (for [i splitted]
                    (seq (.split i (js/RegExp. (str "([1-3]\\[mu\\]|\\[[^\\]]*\\])") "g"))))]
+    (log "message text:" text)
     (flatten oldstyle)))
 
 (def get-message-parts (memoize get-message-parts-impl))
@@ -455,7 +459,8 @@
           (when (or (not-spectator? game-state app-state)
                     (not (:mutespectators game)))
             [:form {:on-submit #(send-msg % owner)
-                    :on-input #(send-typing % owner)}
+                    :on-input #(send-typing % owner)
+                    }
              [:input {:ref "msg-input" :placeholder "Say something" :accessKey "l"}]]))]))))
 
 (defn handle-dragstart [e cursor]

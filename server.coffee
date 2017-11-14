@@ -215,6 +215,10 @@ requester.connect("tcp://#{clojure_hostname}:1043")
 
 sendGameResponse = (game, response) ->
   diffs = response.runnerdiff
+  console.log("RunnerDiffs:")
+  console.log(diffs)
+  console.log("CorpDiffs:")
+  console.log(response.corpdiff)
 
   for player in game.players
     socket = io.sockets.connected[player.id]
@@ -436,9 +440,9 @@ lobby = io.of('/lobby').on 'connection', (socket) ->
 
       when "say"
         game = games[msg.gameid]
-        unless user_allowed_in_game(getUsername(socket), game)
-          fn("not allowed")
-          return
+        # unless user_allowed_in_game(getUsername(socket), game)
+        #   fn("not allowed")
+        #   return
 
         lobby.to(msg.gameid).emit("netrunner", {type: "say", user: socket.request.user, text: msg.text})
 
@@ -509,10 +513,10 @@ lobby = io.of('/lobby').on 'connection', (socket) ->
             refreshLobby("update", msg.gameid)
 
       when "do"
-        if msg.command == "say"
-          game = games[socket.gameid]
-          if game and msg.side == "spectator" and game.mutespectators
-            return
+        # if msg.command == "say"
+        #   game = games[socket.gameid]
+        #   if game and msg.side == "spectator" and game.mutespectators
+        #     return
         try
           msg.user = socket.request.user
           requester.send(JSON.stringify(msg))
