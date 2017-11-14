@@ -1,29 +1,44 @@
 (in-ns 'game.core)
 
 (def cards-hardware
-  {"Akamatsu Mem Chip"
+  {"Adjusted Matrix"
+   {:implementation "Click Adjusted Matrix to use ability"
+    :req (req (not-empty (filter #(has-subtype? % "Icebreaker") (all-installed state :runner))))
+    :prompt "Choose Icebreaker on which to install Adjusted Matrix"
+    :choices {:req #(and (= (:side %) "Runner") (has-subtype? % "Icebreaker") (installed? %))}
+    :msg (msg "host it on " (card-str state target))
+    :effect (effect (update! (assoc target :subtype (combine-subtypes false (-> target :subtype) "AI")))
+                    (host (get-card state target) (get-card state card)))
+    :abilities [{:cost [:click 1]
+                 :req (req run)
+                 :msg "break ice subroutine"}]
+    :events {:pre-card-moved {:req (req (= (:cid target) (:cid card)))
+                              :effect (effect (update! (assoc (-> card :host) :subtype (-> card :host :subtype (remove-subtypes-once ["AI"])))))}}}
+
+   "Akamatsu Mem Chip"
    {:in-play [:memory 1]}
 
    "Archives Interface"
    {:events
-    {:successful-run
+    {:pre-access
      {:delayed-completion true
+      :interactive (req true)
       :req (req (and (= target :archives)
                      (not= (:max-access run) 0)
                      (not-empty (:discard corp))))
-      :effect (effect (continue-ability
-                        {:optional
-                         {:delayed-completion true
-                          :prompt "Use Archives Interface to remove a card from the game instead of accessing it?"
-                          :yes-ability
-                          {:delayed-completion true
-                           :effect (req (swap! state update-in [:corp :discard] #(map (fn [c] (assoc c :seen true)) %))
-                                        (continue-ability state side
+      :effect (req (swap! state update-in [:corp :discard] #(map (fn [c] (assoc c :seen true)) %))
+                   (continue-ability state side
+                     {:optional
+                      {:delayed-completion true
+                       :prompt "Use Archives Interface to remove a card from the game instead of accessing it?"
+                       :yes-ability
+                       {:delayed-completion true
+                        :effect (effect (continue-ability
                                           {:prompt "Choose a card in Archives to remove from the game instead of accessing"
                                            :choices (req (:discard corp))
                                            :msg (msg "remove " (:title target) " from the game")
                                            :effect (effect (move :corp target :rfg))} card nil))}
-                          :no-ability {:effect (req (effect-completed state side eid))}}} card nil))}}}
+                       :no-ability {:effect (req (effect-completed state side eid))}}} card nil))}}}
 
    "Astrolabe"
    {:in-play [:memory 1]
@@ -113,9 +128,10 @@
                  :cost [:click 1]
                  :effect (req (let [handsize (count (:hand runner))]
                                 (resolve-ability state side
-                                  {:prompt "Choose any number of cards to trash from your Grip"
-                                   :choices {:max handsize :req #(and (= (:side %) "Runner")
-                                                                      (in-hand? %))}
+                                  {:prompt "Select any number of cards to trash from your Grip"
+                                   :choices {:max handsize
+                                             :req #(and (= (:side %) "Runner")
+                                                        (in-hand? %))}
                                    :effect (req (let [trashed (count targets)
                                                       remaining (- handsize trashed)]
                                                   (doseq [c targets]
@@ -142,13 +158,16 @@
                                                    (lose state side :tag 1)))} card nil))}]}
 
    "Clone Chip"
-   {:abilities [{:prompt "Choose a program to install from your Heap" :msg (msg "install " (:title target))
+   {:abilities [{:prompt "Select a program to install from your Heap"
                  :priority true :show-discard true
                  :req (req (and (not (seq (get-in @state [:runner :locked :discard])))
                                (not (install-locked? state side))))
                  :choices {:req #(and (is-type? % "Program")
                                       (= (:zone %) [:discard]))}
-                 :effect (effect (trash card {:cause :ability-cost}) (runner-install target))}]}
+                 :effect (req (when (>= (:credit runner) (:cost target))
+                                    (do (runner-install state side target)
+                                        (trash state side card {:cause :ability-cost})
+                                        (system-msg state side (str "uses " (:title card) " to install " (:title target))))))}]}
 
    "Comet"
    {:in-play [:memory 1]
@@ -157,7 +176,7 @@
                                                    (str "can play another event without spending a [Click] by clicking on Comet"))
                                        (update! state side (assoc card :comet-event true)))}}
     :abilities [{:req (req (:comet-event card))
-                 :prompt "Choose an Event in your Grip to play"
+                 :prompt "Select an Event in your Grip to play"
                  :choices {:req #(and (is-type? % "Event")
                                       (in-hand? %))}
                  :msg (msg "play " (:title target))
@@ -165,7 +184,7 @@
                                  (update! (dissoc (get-card state card) :comet-event)))}]}
 
    "Cortez Chip"
-   {:abilities [{:prompt "Choose a piece of ICE"
+   {:abilities [{:prompt "Select a piece of ICE"
                  :choices {:req ice?}
                  :effect (req (let [ice target]
                                 (update! state side (assoc card :cortez-target ice))
@@ -188,6 +207,24 @@
 
    "Cybsoft MacroDrive"
    {:recurring 1}
+
+   "Daredevil"
+   {:in-play [:memory 2]
+    :events {:run-big {:once :per-turn
+                       :req (req (first-event? state side :run-big))
+                       :msg "draw two cards"
+                       :effect (effect (draw 2))}}}
+
+   "Dedicated Processor"
+   {:implementation "Click Dedicated Processor to use ability"
+    :req (req (not-empty (filter #(has-subtype? % "Icebreaker") (all-installed state :runner))))
+    :hosting {:req #(and (has-subtype? % "Icebreaker")
+                         (not (has-subtype? % "AI"))
+                         (installed? %))}
+    :abilities [{:cost [:credit 2]
+                 :req (req run)
+                 :effect (effect (pump (get-card state (:host card)) 4))
+                 :msg (msg (str "pump the strength of " (get-in card [:host :title]) " by 4"))}]}
 
    "Deep Red"
    {:implementation "MU use restriction not enforced"
@@ -219,7 +256,7 @@
    "Dinosaurus"
    {:abilities [{:label "Install a non-AI icebreaker on Dinosaurus"
                  :req (req (empty? (:hosted card))) :cost [:click 1]
-                 :prompt "Choose a non-AI icebreaker in your Grip to install on Dinosaurus"
+                 :prompt "Select a non-AI icebreaker in your Grip to install on Dinosaurus"
                  :choices {:req #(and (has-subtype? % "Icebreaker")
                                       (not (has-subtype? % "AI"))
                                       (in-hand? %))}
@@ -228,7 +265,7 @@
                                  (update! (assoc (get-card state card) :dino-breaker (:cid target))))}
                 {:label "Host an installed non-AI icebreaker on Dinosaurus"
                  :req (req (empty? (:hosted card)))
-                 :prompt "Choose an installed non-AI icebreaker to host on Dinosaurus"
+                 :prompt "Select an installed non-AI icebreaker to host on Dinosaurus"
                  :choices {:req #(and (has-subtype? % "Icebreaker")
                                       (not (has-subtype? % "AI"))
                                       (installed? %))}
@@ -364,6 +401,9 @@
                  :choices {:req installed?} :effect (effect (expose eid target))
                  :msg "expose 1 card"}]}
 
+   "LLDS Memory Diamond"
+   {:in-play [:link 1 :memory 1 :hand-size-modification 1]}
+
    "LLDS Processor"
    {:events
      (let [llds {:effect (req (let [cards (:llds-target card)]
@@ -391,17 +431,28 @@
                               (shuffle! :deck)
                               (move target :hand))}}}
 
+   "Māui"
+   {:in-play [:memory 2]
+    :recurring (effect (set-prop card :rec-counter (count (:ices (get-in @state [:corp :servers :hq])))))
+    :effect (effect (set-prop card :rec-counter (count (:ices (get-in @state [:corp :servers :hq])))))}
+
    "Maw"
-   (let [manual {:optional
-                 {:label "Trash a card from HQ"
-                  :req (req (not (used-this-turn? (:cid card) state)))
-                  :prompt "Use Maw to trash a card from HQ?"
-                  :yes-ability {:msg "force the Corp to trash a random card from HQ"
-                                :once :per-turn
-                                :effect (req (trash state :corp (first (shuffle (:hand corp)))))}}}]
+   (let [ability {:label "Trash a card from HQ"
+                  :req (req (and (first-event? state side :no-trash)
+                                 (first-event? state side :no-steal)
+                                 (pos? (count (:hand corp)))
+                                 (not= (first (:zone target)) :discard)))
+                  :once :per-turn
+                  :msg "force the Corp to trash a random card from HQ"
+                  :effect (req (let [card-to-trash (first (shuffle (:hand corp)))
+                                     card-seen? (= (:cid target) (:cid card-to-trash))
+                                     card-to-trash (if card-seen? (assoc card-to-trash :seen true)
+                                                                  card-to-trash)]
+                                 (trash state :corp card-to-trash)))}]
      {:in-play [:memory 2]
-      :implementation "Manual - click card to fire the trash"
-      :abilities [manual]})
+      :abilities [ability]
+      :events {:no-trash ability
+               :no-steal ability}})
 
    "Maya"
    {:in-play [:memory 2]
@@ -415,8 +466,8 @@
                                 (when (is-type? c "Agenda") ; trashing before the :access events actually fire; fire them manually
                                   (resolve-steal-events state side c))
                                 (move state :corp c :deck)
-                                (close-access-prompt state side)
-                                (tag-runner state :runner eid 1)))}
+                                (when-completed (tag-runner state :runner (make-eid state) 1)
+                                                (close-access-prompt state side))))}
                 {:once :per-turn
                  :label "Move a previously accessed card to bottom of R&D"
                  :effect (effect (resolve-ability
@@ -442,14 +493,14 @@
              {:delayed-completion true
               :req (req (= target :rd))
               :effect (effect (continue-ability
-                                {:prompt "Choose a card and replace 1 spent [Recurring Credits] on it"
+                                {:prompt "Select a card and replace 1 spent [Recurring Credits] on it"
                                  :choices {:req #(< (:rec-counter % 0) (:recurring (card-def %) 0))}
                                  :msg (msg "replace 1 spent [Recurring Credits] on " (:title target))
                                  :effect (effect (add-prop target :rec-counter 1))}
                                card nil))}}}
 
    "Monolith"
-   (let [mhelper (fn mh [n] {:prompt "Choose a program to install"
+   (let [mhelper (fn mh [n] {:prompt "Select a program to install"
                              :choices {:req #(and (is-type? % "Program")
                                                   (in-hand? %))}
                              :effect (req (install-cost-bonus state side [:credit -4])
@@ -486,8 +537,8 @@
                  :req (req (empty? (:hosted card)))
                  :effect (req (let [n (count (filter #(= (:title %) (:title card)) (all-installed state :runner)))]
                                 (resolve-ability state side
-                                  {:prompt "Choose a program in your Grip to install on NetChip"
-                                   :cost [:click 1]
+                                  {:cost [:click 1]
+                                   :prompt "Select a program in your Grip to install on NetChip"
                                    :choices {:req #(and (is-type? % "Program")
                                                         (runner-can-install? state side % false)
                                                         (<= (:memoryunits %) n)
@@ -503,7 +554,7 @@
                  :req (req (empty? (:hosted card)))
                  :effect (req (let [n (count (filter #(= (:title %) (:title card)) (all-installed state :runner)))]
                                 (resolve-ability state side
-                                  {:prompt "Choose an installed program to host on NetChip"
+                                  {:prompt "Select an installed program to host on NetChip"
                                    :choices {:req #(and (is-type? % "Program")
                                                         (<= (:memoryunits %) n)
                                                         (installed? %))}
@@ -545,7 +596,7 @@
     :abilities [{:label "Install and host a program of 1[Memory Unit] or less on Omni-drive"
                  :req (req (empty? (:hosted card)))
                  :cost [:click 1]
-                 :prompt "Choose a program of 1[Memory Unit] or less to install on Omni-drive from your grip"
+                 :prompt "Select a program of 1[Memory Unit] or less to install on Omni-drive from your grip"
                  :choices {:req #(and (is-type? % "Program")
                                       (<= (:memoryunits %) 1)
                                       (in-hand? %))}
@@ -554,7 +605,7 @@
                                  (runner-install target {:host-card card})
                                  (update! (assoc (get-card state card) :Omnidrive-prog (:cid target))))}
                 {:label "Host an installed program of 1[Memory Unit] or less on Omni-drive"
-                 :prompt "Choose an installed program of 1[Memory Unit] or less to host on Omni-drive"
+                 :prompt "Select an installed program of 1[Memory Unit] or less to host on Omni-drive"
                  :choices {:req #(and (is-type? % "Program")
                                       (<= (:memoryunits %) 1)
                                       (installed? %))}
@@ -574,6 +625,26 @@
                  :effect (req (damage-prevent state side :meat 1)
                               (when (= (get-in card [:counter :power]) 0)
                                 (trash state side card {:unpreventable true})))}]}
+
+   "Polyhistor"
+   (let [abi {:optional
+              {:prompt "Draw 1 card to force the Corp to draw 1 card?"
+               :yes-ability {:msg "draw 1 card and force the Corp to draw 1 card"
+                             :effect (effect (draw :runner 1)
+                                             (draw :corp 1))}
+               :no-ability {:effect (req (system-msg state side (str "does not use Polyhistor"))
+                                         (effect-completed state side eid))}}}]
+     {:in-play [:link 1 :memory 1]
+      :events {:pass-ice {:req (req (and (= (:server run) [:hq]) (= (:position run) 1) ; trigger when last ICE passed
+                                         (pos? (count (:deck runner)))))
+                          :delayed-completion true
+                          :once :per-turn
+                          :effect (req (continue-ability state :runner abi card nil))}
+               :run {:req (req (and (= (:server run) [:hq]) (= (:position run) 0) ; trigger on unprotected HQ
+                                    (pos? (count (:deck runner)))))
+                     :delayed-completion true
+                     :once :per-turn
+                     :effect (req (continue-ability state :runner abi card nil))}}})
 
    "Prepaid VoicePAD"
    {:recurring 1}
@@ -681,11 +752,45 @@
                                                        (move (some #(when (= (:title %) (:title target)) %)
                                                                    (:deck runner)) :hand))}}}}}
 
+   "Respirocytes"
+   (let [ability {:once :per-turn
+                  :msg "draw 1 card and add a power counter to itself"
+                  :effect (req (draw state :runner)
+                               (add-counter state side (get-card state card) :power 1)
+                               (when (= (get-in (get-card state card) [:counter :power]) 3)
+                                 (system-msg state :runner "trashes Respirocytes as it reached 3 power counters")
+                                 (trash state side card {:unpreventable true})))}]
+   {:effect (req (add-watch state :respirocytes
+                            (fn [k ref old new]
+                              (when (and (seq (get-in old [:runner :hand]))
+                                         (empty? (get-in new [:runner :hand])))
+                                (resolve-ability ref side ability card nil))))
+                 (damage state side eid :meat 1 {:unboostable true :card card}))
+    :msg "suffer 1 meat damage"
+    :trash-effect {:effect (req (remove-watch state :respirocytes))}
+    :leave-play (req (remove-watch state :respirocytes))
+    :events {:runner-turn-begins {:req (req (empty? (get-in @state [:runner :hand])))
+                                  :effect (effect (resolve-ability ability card nil))}
+             :corp-turn-begins {:req (req (empty? (get-in @state [:runner :hand])))
+                                :effect (effect (resolve-ability ability card nil))}}})
+
+   "Rubicon Switch"
+   {:abilities [{:cost [:click 1]
+                 :once :per-turn
+                 :delayed-completion true
+                 :prompt "How many [Credits]?" :choices :credit
+                 :effect (effect (system-msg (str "spends a [Click] and " target " [Credit] on Rubicon Switch"))
+                                 (resolve-ability {:choices {:req #(and (ice? %)
+                                                                        (= :this-turn (:rezzed %))
+                                                                        (<= (:cost %) target))}
+                                                   :effect (effect (derez target))
+                                                   :msg (msg "derez " (:title target))} card nil))}]}
+
    "Security Chip"
    {:abilities [{:label "[Trash]: Add [Link] strength to a non-Cloud icebreaker until the end of the run"
                  :msg (msg "add " (:link runner) " strength to " (:title target) " until the end of the run")
                  :req (req (:run @state))
-                 :prompt "Choose one non-Cloud icebreaker"
+                 :prompt "Select one non-Cloud icebreaker"
                  :choices {:req #(and (has-subtype? % "Icebreaker")
                                       (not (has-subtype? % "Cloud"))
                                       (installed? %))}
@@ -694,10 +799,11 @@
                 {:label "[Trash]: Add [Link] strength to any Cloud icebreakers until the end of the run"
                  :msg (msg "add " (:link runner) " strength to " (count targets) " Cloud icebreakers until the end of the run")
                  :req (req (:run @state))
-                 :prompt "Choose any number of Cloud icebreakers"
-                 :choices {:max 50 :req #(and (has-subtype? % "Icebreaker")
-                                              (has-subtype? % "Cloud")
-                                              (installed? %))}
+                 :prompt "Select any number of Cloud icebreakers"
+                 :choices {:max 50
+                           :req #(and (has-subtype? % "Icebreaker")
+                                      (has-subtype? % "Cloud")
+                                      (installed? %))}
                  :effect (req (doseq [t targets]
                                 (pump state side t (:link runner) :all-run)
                                 (update-breaker-strength state side t))
@@ -706,10 +812,11 @@
    "Security Nexus"
    {:in-play [:memory 1 :link 1]
     :abilities [{:req (req (:run @state))
+                 :once :per-turn
                  :delayed-completion true
                  :msg "force the Corp to initiate a trace"
                  :label "Trace 5 - Give the Runner 1 tag and end the run"
-                 :trace {:once :per-turn :base 5 :msg "give the Runner 1 tag and end the run"
+                 :trace {:base 5 :msg "give the Runner 1 tag and end the run"
                          :effect (effect (tag-runner :runner eid 1) (end-run))
                          :unsuccessful {:msg "bypass the current ICE"}}}]}
 
@@ -727,12 +834,12 @@
                                                    (trash-cards state side targets)
                                                    (game.core/run state side srv nil card)
                                                    (register-events state side
-                                                     {:successful-run
+                                                     {:pre-access
                                                       {:silent (req true)
                                                        :effect (effect (access-bonus bonus))}
                                                       :run-ends {:effect (effect (unregister-events card))}} card)))}
                                  card nil)))}]
-    :events {:successful-run nil :run-ends nil}}
+    :events {:pre-access nil :run-ends nil}}
 
    "Şifr"
    {:in-play [:memory 2]
@@ -760,7 +867,9 @@
    "Spinal Modem"
    {:in-play [:memory 1]
     :recurring 2
-    :events {:successful-trace {:req (req run) :effect (effect (damage eid :brain 1 {:card card}))}}}
+    :events {:successful-trace {:req (req run)
+                                :effect (effect (system-msg (str "suffers 1 brain damage from Spinal Modem"))
+                                                (damage eid :brain 1 {:card card}))}}}
 
    "Sports Hopper"
    {:in-play [:link 1]
@@ -789,15 +898,15 @@
 
    "The Gauntlet"
    {:in-play [:memory 2]
-    :events {:pre-access {:req (req (= :hq target))
+    :events {:pre-access {:req (req (and (= :hq target)
+                                         run))
                           :silent (req true)
                           :delayed-completion true
                           :effect (effect (continue-ability
                                             {:prompt "How many ICE protecting HQ did you break all subroutines on?"
-                                             ; HACK ALERT - :number needs an upper limit. we don't track "broke all subroutines"
-                                             ; events, so we can't put an accurate upper limit here. The higher the upper limit,
-                                             ; the more entries in the UI drop-down list. 10 seems OK.
-                                             :choices {:number (req 10)}
+                                             ;; Makes number of ice on server (HQ) the upper limit.
+                                             ;; This should work since trashed ice do not count according to UFAQ
+                                             :choices {:number (req (count (get-in @state [:corp :servers :hq :ices])))}
                                              :effect (effect (access-bonus target))}
                                             card nil))}}}
 
@@ -816,10 +925,11 @@
    {:events
     {:pre-resolve-damage
      {:delayed-completion true
-      :req (req (and (> (last targets) 0)
+      :req (req (and (pos? (last targets))
                      (runner-can-choose-damage? state)
                      (not (get-in @state [:damage :damage-replace]))))
       :effect (req (let [dtype target
+                         src (second targets)
                          dmg (last targets)]
                      (when (> dmg (count (:hand runner)))
                        (flatline state))
@@ -827,23 +937,26 @@
                        (swap! state update-in [:runner :brain-damage] #(+ % dmg))
                        (swap! state update-in [:runner :hand-size-modification] #(- % dmg)))
                      (show-wait-prompt state :corp "Runner to use Titanium Ribs to choose cards to be trashed")
-                     (continue-ability state side
-                       {:prompt (msg "Choose " dmg " cards to trash for the " (name dtype) " damage") :player :runner
-                        :choices {:max dmg :req #(and (in-hand? %) (= (:side %) "Runner"))}
-                        :msg (msg "trash " (join ", " (map :title targets)))
-                        :effect (req (clear-wait-prompt state :corp)
-                                     (doseq [c targets]
-                                       (trash state side c {:cause dtype :unpreventable true}))
-                                     (trigger-event state side :damage-chosen)
-                                     (damage-defer state side dtype 0)
-                                     (effect-completed state side eid card))}
-                      card nil)
-                      (trigger-event state side :damage dtype nil)))}
+                     (when-completed (resolve-ability state side
+                                       {:delayed-completion true
+                                        :prompt (msg "Select " dmg " cards to trash for the " (name dtype) " damage")
+                                        :player :runner
+                                        :choices {:max dmg :all true :req #(and (in-hand? %) (= (:side %) "Runner"))}
+                                        :msg (msg "trash " (join ", " (map :title targets)))
+                                        :effect (req (clear-wait-prompt state :corp)
+                                                     (doseq [c targets]
+                                                       (trash state side c {:cause dtype :unpreventable true}))
+                                                     (trigger-event state side :damage-chosen)
+                                                     (damage-defer state side dtype 0)
+                                                     (effect-completed state side eid))}
+                                      card nil)
+                                     (do (trigger-event state side :damage dtype src dmg)
+                                         (effect-completed state side eid)))))}
     :damage-chosen {:effect (effect (enable-runner-damage-choice))}}
     :delayed-completion true
     :effect (effect (enable-runner-damage-choice)
                     (system-msg (str "suffers 2 meat damage from installing Titanium Ribs"))
-                    (damage eid :meat 2 {:card card}))
+                    (damage eid :meat 2 {:unboostable true :card card}))
     :leave-play (req (swap! state update-in [:damage] dissoc :damage-choose-runner))}
 
    "Top Hat"
@@ -853,7 +966,7 @@
               :prompt "Which card from the top of R&D would you like to access? (Card 1 is on top.)"
               :choices (take n ["1" "2" "3" "4" "5"])
               :effect (effect (system-msg (str "accesses the card at position " (Integer/parseInt target) " of R&D"))
-                              (handle-access eid [(nth (:deck corp) (dec (Integer/parseInt target)))]))})]
+                              (handle-access eid [(nth (:deck corp) (dec (Integer/parseInt target)))] "an unseen card"))})]
      {:events {:successful-run
                {:req (req (= target :rd))
                 :interactive (req true)
@@ -878,7 +991,7 @@
                                :effect (req
                                          (continue-ability
                                            state side
-                                           {:prompt (str "Choose a scored Corp agenda to swap with " (:title stolen))
+                                           {:prompt (str "Select a scored Corp agenda to swap with " (:title stolen))
                                             :choices {:req #(in-corp-scored? state side %)}
                                             :effect (req (let [scored target]
                                                            (swap-agendas state side scored stolen)
@@ -904,8 +1017,10 @@
 
    "Unregistered S&W 35"
    {:abilities
-    [{:cost [:click 2] :req (req (some #{:hq} (:successful-run runner-reg)))
-      :label "trash a Bioroid, Clone, Executive or Sysop" :prompt "Choose a Bioroid, Clone, Executive, or Sysop to trash"
+    [{:cost [:click 2]
+      :req (req (some #{:hq} (:successful-run runner-reg)))
+      :label "trash a Bioroid, Clone, Executive or Sysop"
+      :prompt "Select a Bioroid, Clone, Executive, or Sysop to trash"
       :choices {:req #(and (rezzed? %)
                            (or (has-subtype? % "Bioroid")
                                (has-subtype? % "Clone")

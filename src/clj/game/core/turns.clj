@@ -5,13 +5,14 @@
 
 (def game-states (atom {}))
 
-(defn- card-implemented [card]
+(defn- card-implemented
   "Checks if the card is implemented. Looks for a valid return from `card-def`.
   If implemented also looks for `:implementation` key which may contain special notes.
   Returns either:
     nil - not implemented
     :full - implemented fully
     msg - string with implementation notes"
+  [card]
   (when-let [cdef (card-def card)]
     ;; Card is defined - hence implemented
     (if-let [impl (:implementation cdef)]
@@ -42,22 +43,29 @@
 
 (defn init-game
   "Initializes a new game with the given players vector."
-  [{:keys [players gameid spectatorhands] :as game}]
+  [{:keys [players gameid spectatorhands room] :as game}]
   (let [corp (some #(when (= (:side %) "Corp") %) players)
         runner (some #(when (= (:side %) "Runner") %) players)
         corp-deck (create-deck (:deck corp) (:user corp))
         runner-deck (create-deck (:deck runner) (:user runner))
+        corp-deck-id (get-in corp [:deck :_id])
+        runner-deck-id (get-in runner [:deck :_id])
+        corp-options (get-in corp [:options])
+        runner-options (get-in runner [:options])
         corp-identity (assoc (or (get-in corp [:deck :identity]) {:side "Corp" :type "Identity"}) :cid (make-cid))
         corp-identity (assoc corp-identity :implementation (card-implemented corp-identity))
         runner-identity (assoc (or (get-in runner [:deck :identity]) {:side "Runner" :type "Identity"}) :cid (make-cid))
         runner-identity (assoc runner-identity :implementation (card-implemented runner-identity))
         state (atom
                 {:gameid gameid :log [] :active-player :runner :end-turn true
+                 :room room
                  :rid 0 :turn 0 :eid 0
                  :sfx [] :sfx-current-id 0
                  :options {:spectatorhands spectatorhands}
                  :corp {:user (:user corp) :identity corp-identity
+                        :options corp-options
                         :deck (zone :deck corp-deck)
+                        :deck-id corp-deck-id
                         :hand []
                         :discard [] :scored [] :rfg [] :play-area []
                         :servers {:hq {} :rd{} :archives {}}
@@ -67,7 +75,9 @@
                         :agenda-point 0
                         :click-per-turn 3 :agenda-point-req 7 :keep false}
                  :runner {:user (:user runner) :identity runner-identity
+                          :options runner-options
                           :deck (zone :deck runner-deck)
+                          :deck-id runner-deck-id
                           :hand []
                           :discard [] :scored [] :rfg [] :play-area []
                           :rig {:program [] :resource [] :hardware []}
@@ -93,11 +103,17 @@
    (@all-cards title)))
 
 (defn make-card
-  "Makes a proper card from an @all-cards card"
-  [card]
+  "Makes or remakes (with current cid) a proper card from an @all-cards card"
+  ([card] (make-card card (make-cid)))
+  ([card cid]
   (-> card
-      (assoc :cid (make-cid) :implementation (card-implemented card))
-      (dissoc :setname :text :_id :influence :number :influencelimit :factioncost)))
+      (assoc :cid cid :implementation (card-implemented card))
+      (dissoc :setname :text :_id :influence :number :influencelimit :factioncost))))
+
+(defn reset-card
+  "Resets a card back to its original state overlaid with any play-state data"
+  ([state side card]
+   (update! state side (merge card (make-card (get @all-cards (:title card)) (:cid card))))))
 
 (defn create-deck
   "Creates a shuffled draw deck (R&D/Stack) from the given list of cards.
@@ -105,10 +121,10 @@
   ([deck] (create-deck deck nil))
   ([deck user]
    (shuffle (mapcat #(map (fn [card]
-                            (let [card (or (server-card (:title card) user) card)
-                                  c (make-card card)]
+                            (let [server-card (or (server-card (:title card) user) card)
+                                  c (assoc (make-card server-card) :art (:art card))]
                               (if-let [init (:init (card-def c))] (merge c init) c)))
-                          (repeat (:qty %) (:card %)))
+                          (repeat (:qty %) (assoc (:card %) :art (:art %))))
                     (shuffle (vec (:cards deck)))))))
 
 (defn make-rid
@@ -162,7 +178,8 @@
   (swap! state dissoc-in [side :extra-click-temp])
   (when-completed (trigger-event-sync state side (if (= side :corp) :corp-turn-begins :runner-turn-begins))
                   (do (when (= side :corp)
-                        (draw state side))
+                        (draw state side)
+                        (trigger-event state side :corp-mandatory-draw))
                       (swap! state dissoc (if (= side :corp) :corp-phase-12 :runner-phase-12))
                       (when (= side :corp)
                         (update-all-advancement-costs state side)))))
@@ -215,8 +232,13 @@
       (swap! state assoc :end-turn true)
       (swap! state update-in [side :register] dissoc :cannot-draw)
       (swap! state update-in [side :register] dissoc :drawn-this-turn)
+      (doseq [c (filter #(= :this-turn (:rezzed %)) (all-installed state :corp))]
+        (update! state side (assoc c :rezzed true)))
       (clear-turn-register! state)
       (swap! state dissoc :turn-events)
-      (when (some? (get-in @state [side :extra-turn]))
-        (start-turn state side nil)
-        (swap! state dissoc-in [side :extra-turn])))))
+      (when-let [extra-turns (get-in @state [side :extra-turns])]
+        (when (> extra-turns 0)
+          (start-turn state side nil)
+          (swap! state update-in [side :extra-turns] dec)
+          (let [turns (if (= 1 extra-turns) "turn" "turns")]
+            (system-msg state side (clojure.string/join ["will have " extra-turns " extra " turns " remaining."]))))))))

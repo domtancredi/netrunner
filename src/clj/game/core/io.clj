@@ -12,7 +12,24 @@
       (when (and (not= side nil) (not= side :spectator))
         (command state side)
         (swap! state update-in [:log] #(conj % {:user nil :text (str "[!]" (:username author) " uses a command: " text)})))
-      (swap! state update-in [:log] #(conj % {:user author :text text})))))
+      (swap! state update-in [:log] #(conj % {:user author :text text})))
+    (swap! state assoc :typing (remove #{(:username author)} (:typing @state)))))
+
+(defn typing
+  "Updates game state list with username of whoever is typing"
+  [state side {:keys [user]}]
+  (let [author (:username (or user (get-in @state [side :user])))]
+    (swap! state assoc :typing (distinct (conj (:typing @state) author)))
+    ;; say something to force update in client side rendering
+    (say state side {:user "__system__" :text "typing"})))
+
+(defn typingstop
+  "Clears typing flag from game state for user"
+  [state side {:keys [user text]}]
+  (let [author (or user (get-in @state [side :user]))]
+    (swap! state assoc :typing (remove #{(:username author)} (:typing @state)))
+    ;; say something to force update in client side rendering
+    (say state side {:user "__system__" :text "typing"})))
 
 (defn system-msg
   "Prints a message to the log without a username."
@@ -153,6 +170,9 @@
                                             (rez state side c {:ignore-cost :all-costs :force true}))))}}}
     {:title "/rez-all command"} nil))
 
+(defn command-roll [state side value]
+  (system-msg state side (str "rolls a " value " sided die and rolls a " (inc (rand-int value)))))
+
 (defn command-close-prompt [state side]
   (when-let [fprompt (-> @state side :prompt first)]
     (swap! state update-in [side :prompt] rest)
@@ -177,6 +197,7 @@
                                                                             ": " (get-card state target))))
                                            :choices {:req (fn [t] (card-is? t :side %2))}}
                                           {:title "/card-info command"} nil)
+          "/clear-win"  #(clear-win %1 %2)
           "/click"      #(swap! %1 assoc-in [%2 :click] (max 0 value))
           "/close-prompt" #(command-close-prompt %1 %2)
           "/counter"    #(command-counter %1 %2 args)
@@ -196,6 +217,12 @@
                                              :effect (effect (move target :deck))
                                              :choices {:req (fn [t] (and (card-is? t :side %2) (in-hand? t)))}}
                                             {:title "/move-bottom command"} nil)
+          "/move-hand"  #(resolve-ability %1 %2
+                                          {:prompt "Select a card to move to your hand"
+                                           :effect (req (let [c (deactivate %1 %2 target)]
+                                                          (move %1 %2 c :hand)))
+                                           :choices {:req (fn [t] (card-is? t :side %2))}}
+                                          {:title "/move-hand command"} nil)
           "/psi"        #(when (= %2 :corp) (psi-game %1 %2
                                                       {:title "/psi command" :side %2}
                                                       {:equal  {:msg "resolve equal bets effect"}
@@ -212,6 +239,7 @@
                                                           (move %1 %2 c :rfg)))
                                            :choices {:req (fn [t] (card-is? t :side %2))}}
                                           {:title "/rfg command"} nil)
+          "/roll"       #(command-roll %1 %2 value)
           "/tag"        #(swap! %1 assoc-in [%2 :tag] (max 0 value))
           "/take-brain" #(when (= %2 :runner) (damage %1 %2 :brain (max 0 value)))
           "/take-meat"  #(when (= %2 :runner) (damage %1 %2 :meat  (max 0 value)))
@@ -240,11 +268,8 @@
 (defn event-title
   "Gets a string describing the internal engine event keyword"
   [event]
-  (case event
-    :agenda-scored "agenda-scored"
-    :agenda-stolen "agenda-stolen"
-    :runner-install "runner-install"
-    :successful-run "successful-run"
+  (if (keyword? event)
+    (name event)
     (str event)))
 
 (defn show-error-toast
