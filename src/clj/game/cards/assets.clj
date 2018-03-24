@@ -373,24 +373,31 @@
    "Daily Business Show"
    {:events {:pre-corp-draw
              {:msg "draw additional cards"
+              ;; The req catches draw events that happened before DBS was rezzed.
+              :req (req (first-event? state :corp :pre-corp-draw))
+              ;; The once and once-key force a single DBS to act on behalf of all rezzed DBS's.
               :once :per-turn
               :once-key :daily-business-show-draw-bonus
-              :req (req (first-event? state side :pre-corp-draw))
               :effect (req (let [dbs (count (filter #(and (= "06086" (:code %)) (rezzed? %)) (all-installed state :corp)))]
                              (draw-bonus state side dbs)))}
              :post-corp-draw
-             {:once :per-turn
+             {:req (req (first-event? state :corp :post-corp-draw))
+              :once :per-turn
               :once-key :daily-business-show-put-bottom
               :delayed-completion true
               :effect (req (let [dbs (count (filter #(and (= "06086" (:code %)) (rezzed? %)) (all-installed state :corp)))
                                  drawn (get-in @state [:corp :register :most-recent-drawn])]
+                             (show-wait-prompt state :runner "Corp to use Daily Business Show")
                              (continue-ability
                                state side
                                {:prompt (str "Select " (quantify dbs "card") " to add to the bottom of R&D")
                                 :msg (msg "add " (quantify dbs "card") " to the bottom of R&D")
                                 :choices {:max dbs
                                           :req #(some (fn [c] (= (:cid c) (:cid %))) drawn)}
-                                :effect (req (doseq [c targets] (move state side c :deck)))} card targets)))}}}
+                                :effect (req (doseq [c targets] (move state side c :deck))
+                                             (clear-wait-prompt state :runner))
+                                :cancel-effect (effect (clear-wait-prompt :runner))}
+                               card targets)))}}}
 
    "Dedicated Response Team"
    {:events {:successful-run-ends {:req (req tagged)
@@ -634,9 +641,10 @@
    (let [ability {:msg "gain 1 [Credits] and draw 1 card"
                   :label "Gain 1 [Credits] and draw 1 card (start of turn)"
                   :once :per-turn
+                  :delayed-completion true
                   :req (req (:corp-phase-12 @state))
                   :effect (effect (gain :credit 1)
-                                  (draw))}]
+                                  (draw eid 1 nil))}]
      {:derezzed-events {:runner-turn-ends corp-rez-toast}
       :events {:corp-turn-begins ability}
       :abilities [ability]
@@ -695,8 +703,11 @@
       :leave-play cleanup
       :trash-effect {:effect cleanup}
       :events {:corp-spent-click
-               {:effect (req (update! state side (update-in card [:seen-this-turn target] (fnil + 0) (second targets)))
-                             (when (>= (get-in (get-card state card) [:seen-this-turn target]) 3)
+               {:effect (req (when-not target
+                               (print-stack-trace (Exception. (str "WHY JEEVES WHY: " targets))))
+                             (update! state side (update-in card [:seen-this-turn (or target :this-is-a-hack)]
+                                                            (fnil + 0) (second targets)))
+                             (when (>= (get-in (get-card state card) [:seen-this-turn (or target :this-is-a-hack)]) 3)
                                (resolve-ability state side ability card nil)))}
                :corp-turn-ends {:effect cleanup}}})
 
@@ -710,6 +721,21 @@
                  :msg (msg "trash " (:title (first (:deck runner))) " from the Runner's Stack")
                  :effect (effect (mill :runner)
                                  (trash card {:cause :ability-cost}))}]}
+
+   "Kuwinda K4H1U3"
+   (let [ability {:trace {:base (req (get-in card [:counter :power] 0))
+                          :delayed-completion true
+                          :effect (effect (damage :runner eid :brain 1 {:card card})
+                                          (trash card))
+                          :msg "do 1 brain damage"
+                          :unsuccessful {:effect (effect (add-counter card :power 1)
+                                                         (system-msg "adds 1 power counter to Kuwinda K4H1U3"))}}}]
+     {:derezzed-events {:runner-turn-ends corp-rez-toast}
+      :events {:corp-turn-begins
+               {:optional {:prompt "Initiate trace with Kuwinda K4H1U3?"
+                           :delayed-completion true
+                           :yes-ability ability}}}
+      :abilities [(assoc ability :label "Trace X - do 1 brain damage (start of turn)")]})
 
    "Lakshmi Smartfabrics"
    {:events {:rez {:effect (effect (add-counter card :power 1))}}
@@ -749,7 +775,8 @@
                                  (move target :hand))}]}
 
    "Lily Lockwell"
-   {:effect (effect (draw 3))
+   {:delayed-completion true
+    :effect (effect (draw eid 3 nil))
     :msg (msg "draw 3 cards")
     :abilities [{:label "Remove a tag to search R&D for an operation"
                  :prompt "Choose an operation to put on top of R&D"
@@ -867,7 +894,7 @@
    "Mr. Stone"
    {:events {:runner-gain-tag {:delayed-completion true
                                :msg "do 1 meat damage"
-                               :effect (effect (damage eid :meat 1 {:card card}))}}}
+                               :effect (effect (damage :corp eid :meat 1 {:card card}))}}}
 
    "Mumba Temple"
    {:recurring 2}
@@ -979,6 +1006,16 @@
                                                    (trigger-event state side :no-trash card))))}
                                card targets))}}
 
+   "NGO Front"
+   (letfn [(builder [cost cred]
+             {:advance-counter-cost cost
+              :effect (effect (trash card {:cause :ability-cost}) (gain :credit cred))
+              :label (str "[Trash]: Gain " cred " [Credits]")
+              :msg (str "gain " cred " [Credits]")})]
+     {:advanceable :always
+      :abilities [(builder 1 5)
+                  (builder 2 8)]})
+
    "Open Forum"
    {:events {:corp-mandatory-draw {:msg (msg (let [deck (:deck corp)]
                                                (if (pos? (count deck))
@@ -1029,6 +1066,15 @@
       :flags {:corp-phase-12 (req true)}
       :events {:corp-turn-begins ability}
       :abilities [ability]})
+
+   "Personalized Portal"
+   {:events {:corp-turn-begins {:effect (req (draw state :runner 1)
+                                             (let [cnt (count (get-in @state [:runner :hand]))
+                                                   credits (quot cnt 2)]
+                                               (gain state :corp :credit credits)
+                                               (system-msg state :corp
+                                                           (str "uses Personalized Portal to force the runner to draw "
+                                                                "1 card and gains " credits " [Credits]"))))}}}
 
    "Plan B"
    (advance-ambush
@@ -1167,6 +1213,29 @@
     :derezzed-events {:runner-turn-ends corp-rez-toast}
     :events {:corp-turn-begins ability}
     :abilities [ability]})
+
+   "Reconstruction Contract"
+   {:events {:damage {:req (req (and (pos? (nth targets 2)) (= :meat target)))
+                      :effect (effect (add-counter card :advancement 1)
+                                      (system-msg "adds 1 advancement token to Reconstruction Contract"))}}
+    :abilities [{:label "[Trash]: Move advancement tokens to another card"
+                 :prompt "Select a card that can be advanced"
+                 :choices {:req can-be-advanced?}
+                 :effect (req (let [move-to target
+                                    recon card]
+                                (resolve-ability
+                                  state side
+                                  {:prompt "Move how many tokens?"
+                                   :choices {:number (req (:advance-counter recon 0))
+                                             :default (req (:advance-counter recon 0))}
+                                   :effect (effect (add-counter move-to :advancement target)
+                                                   (system-msg (str "trashes Reconstruction Contract to move " target
+                                                                    (pluralize " advancement token" target) " to "
+                                                                    (card-str state move-to)))
+                                                   (trash recon {:cause :ability-cost}))}
+
+                                  card nil)
+                                ))}]}
 
    "Reversed Accounts"
    {:advanceable :always
@@ -1347,8 +1416,8 @@
                                  :yes-ability {:delayed-completion true
                                                :cost [:credit 4]
                                                :msg "do 3 net damage and give the Runner 1 tag"
-                                               :effect (effect (damage eid :net 3 {:card card})
-                                                               (tag-runner :runner eid 1))}}}
+                                               :effect (req (when-completed (damage state side :net 3 {:card card})
+                                                                            (tag-runner state :runner eid 1)))}}}
                                card nil))}}
 
    "Space Camp"
@@ -1411,6 +1480,19 @@
                                  (shuffle! :deck)
                                  (corp-install target nil))}]}
 
+   "TechnoCo"
+   (letfn [(is-techno-target [card]
+             (or (is-type? card "Program")
+                 (is-type? card "Hardware")
+                 (and (is-type? card "Resource") (has-subtype? card "Virtual"))))]
+     {:events {:pre-install {:req (req (and (is-techno-target target)
+                                            (not (second targets)))) ; not facedown
+                             :effect (effect (install-cost-bonus [:credit 1]))}
+               :runner-install {:req (req (and (is-techno-target target)
+                                               (not (second targets)))) ; not facedown
+                                :msg "gain 1 [Credits]"
+                                :effect (req (gain state :corp :credit 1))}}})
+
    "Tenma Line"
    {:abilities [{:label "Swap 2 pieces of installed ICE"
                  :cost [:click 1]
@@ -1418,7 +1500,10 @@
                  :choices {:req #(and (installed? %) (ice? %)) :max 2}
                  :effect (req (when (= (count targets) 2)
                                 (swap-ice state side (first targets) (second targets))))
-                 :msg "swap the positions of two ICE"}]}
+                 :msg (msg "swap the positions of "
+                           (card-str state (first targets))
+                           " and "
+                           (card-str state (second targets)))}]}
 
    "Test Ground"
    {:implementation "Derez is manual"
@@ -1482,6 +1567,19 @@
 
    "Turtlebacks"
    {:events {:server-created {:msg "gain 1 [Credits]" :effect (effect (gain :credit 1))}}}
+
+   "Urban Renewal"
+   {:effect (effect (add-counter card :power 3))
+    :derezzed-events {:runner-turn-ends corp-rez-toast}
+    :events {:corp-turn-begins
+             {:delayed-completion true
+              :effect (req (add-counter state side card :power -1)
+                           (if (<= (get-in card [:counter :power]) 1)
+                             (when-completed
+                               (trash state side card {:cause :ability-cost})
+                               (do (system-msg state :corp "uses Urban Renewal to do 4 meat damage")
+                                   (damage state side eid :meat 4 {:card card})))
+                             (effect-completed state side eid)))}}}
 
    "Victoria Jenkins"
    {:effect (req (lose state :runner :click-per-turn 1)

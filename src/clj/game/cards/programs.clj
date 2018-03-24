@@ -208,15 +208,24 @@
                                                     (runner-install target {:host-card card})
                                                     (update! (assoc (get-card state card) :dheg-prog (:cid target))))}
                                   card nil))}
-                {:label "Host an installed program on Dhegdheer"
+                {:label "Host an installed program on Dhegdheer with [Credit] discount"
                  :req (req (empty? (:hosted card)))
-                 :prompt "Choose an installed program to host on Dhegdheer"
+                 :prompt "Choose an installed program to host on Dhegdheer with [Credit] discount"
                  :choices {:req #(and (is-type? % "Program")
                                       (installed? %))}
                  :msg (msg "host " (:title target) (when (-> target :cost pos?) ", lowering its cost by 1 [Credit]"))
                  :effect (effect (host card target)
                                  (when (-> target :cost pos?)
                                    (gain state side :credit 1))
+                                 (gain :memory (:memoryunits target))
+                                 (update! (assoc (get-card state card) :dheg-prog (:cid target))))}
+                {:label "Host an installed program on Dhegdheer"
+                 :req (req (empty? (:hosted card)))
+                 :prompt "Choose an installed program to host on Dhegdheer"
+                 :choices {:req #(and (is-type? % "Program")
+                                      (installed? %))}
+                 :msg (msg "host " (:title target) (when (-> target :cost pos?)))
+                 :effect (effect (host card target)
                                  (gain :memory (:memoryunits target))
                                  (update! (assoc (get-card state card) :dheg-prog (:cid target))))}]
     :events {:card-moved {:req (req (= (:cid target) (:dheg-prog (get-card state card))))
@@ -313,6 +322,10 @@
                                 :interactive (req true)
                                 :effect (effect (continue-ability reveal card nil))}}})
 
+   "eXer"
+   {:in-play [:rd-access 1]
+    :events {:purge {:effect (effect (trash card))}} }
+
    "Expert Schedule Analyzer"
    {:abilities [{:cost [:click 1]
                  :msg "make a run on HQ"
@@ -356,7 +369,7 @@
 
    "Gravedigger"
    {:events (let [e {:req (req (and (installed? target) (= (:side target) "Corp")))
-                               :effect (effect (add-counter :runner card :virus 1))}]
+                     :effect (effect (add-counter :runner card :virus 1))}]
               {:runner-trash e :corp-trash e})
     :abilities [{:counter-cost [:virus 1]
                  :cost [:click 1]
@@ -416,7 +429,7 @@
    {:flags {:runner-phase-12 (req true)}
     :abilities [{:label "Remove Hyperdriver from the game to gain [Click] [Click] [Click]"
                  :req (req (:runner-phase-12 @state))
-                 :effect (effect (move card :rfg) (gain :memory 3 :click 3))
+                 :effect (effect (move card :rfg) (gain :click 3))
                  :msg "gain [Click] [Click] [Click]"}]}
 
    "Imp"
@@ -642,6 +655,17 @@
                                    :effect (effect (runner-install target {:no-cost true}))} card nil)
                                 (trash state side card)))}]}
 
+   "Plague"
+   {:prompt "Choose a server for Plague" :choices (req servers)
+    :msg (msg "target " target)
+    :req (req (not (get-in card [:special :server-target])))
+    :effect (effect (update! (assoc-in card [:special :server-target] target)))
+    :events {:successful-run
+             {:req (req (= (zone->name (get-in @state [:run :server]))
+                           (get-in (get-card state card) [:special :server-target])))
+              :msg "gain 2 virus counters"
+              :effect (effect (add-counter :runner card :virus 2))}}}
+
    "Pheromones"
    {:recurring (req (when (< (get card :rec-counter 0) (get-in card [:counter :virus] 0))
                       (set-prop state side card :rec-counter
@@ -691,6 +715,34 @@
                                            (installed? target)))
                             :effect (effect (draw :runner 1))
                             :msg "draw 1 card"}}}
+
+   "RNG Key"
+   {:events {:pre-access-card {:req (req (get-in card [:special :rng-guess]))
+                               :delayed-completion true
+                               :msg (msg "to reveal " (:title target))
+                               :effect (req (if-let [guess (get-in card [:special :rng-guess])]
+                                              (if (or (= guess (:cost target))
+                                                      (= guess (:advancementcost target)))
+                                                (continue-ability state side
+                                                                  {:prompt "Choose RNG Key award"
+                                                                   :choices ["Gain 3 [Credits]" "Draw 2 cards"]
+                                                                   :effect (req (if (= target "Draw 2 cards")
+                                                                                  (do (draw state :runner 2)
+                                                                                      (system-msg state :runner "uses RNG Key to draw 2 cards"))
+                                                                                  (do (gain state :runner :credit 3)
+                                                                                      (system-msg state :runner "uses RNG Key to gain 3 [Credits]"))))}
+                                                                  card nil)
+                                                (effect-completed state side eid))
+                                              (effect-completed state side eid)))}
+             :post-access-card {:effect (effect (update! (assoc-in card [:special :rng-guess] nil)))}
+             :successful-run {:req (req (let [first-hq (first-successful-run-on-server? state :hq)
+                                              first-rd (first-successful-run-on-server? state :rd)]
+                                          (and first-hq first-rd (or (= target :hq) (= target :rd)))))
+                              :optional {:prompt "Fire RNG Key?"
+                                         :yes-ability {:prompt "Guess a number"
+                                                       :choices {:number (req 20)}
+                                                       :msg (msg "guess " target)
+                                                       :effect (effect (update! (assoc-in card [:special :rng-guess] target)))}}}}}
 
    "Rook"
    {:abilities [{:cost [:click 1]
@@ -822,6 +874,23 @@
                    :label "Swap the Barrier ICE currently being encountered with a piece of ICE directly before or after it"
                    :effect (effect (resolve-ability (surf state current-ice) card nil))}]})
 
+   "Takobi"
+   {:implementation "Adding power counter is manual"
+    :abilities [{:label "Add 1 power counter"
+                 :effect (effect (add-counter card :power 1)
+                                 (system-msg "adds a power counter to Takobi"))}
+                {:req (req (and (:run @state)
+                                (rezzed? current-ice)
+                                (>= (get-in card [:counter :power] 0) 2)))
+                 :counter-cost [:power 2]
+                 :label "Increase non-AI icebreaker strength by +3 until end of encounter"
+                 :prompt "Choose an installed non-AI icebreaker"
+                 :choices {:req #(and (has-subtype? % "Icebreaker")
+                                      (not (has-subtype? % "AI"))
+                                      (installed? %))}
+                 :msg (msg "add +3 strength to " (:title target) " for remainder of encounter")
+                 :effect (effect (pump target 3 :encounter))}]}
+
    "Tapwrm"
    (let [ability {:label "Gain [Credits] (start of turn)"
                   :msg (msg "gain " (quot (:credit corp) 5) " [Credits]")
@@ -873,5 +942,43 @@
                    :counter-cost [:power 3]
                    :once :per-turn
                    :msg "gain [Click][Click]"
-                   :effect (effect (gain :click 2)) }] }
-  })
+                   :effect (effect (gain :click 2))}]}
+
+   "Wari"
+   (letfn [(prompt-for-subtype []
+             {:prompt "Choose a subtype"
+              :choices ["Barrier" "Code Gate" "Sentry"]
+              :delayed-completion true
+              :effect (req (when-completed (trash state side card {:unpreventable true})
+                             (continue-ability state side
+                                               (expose-and-maybe-bounce target)
+                                               card nil)))})
+           
+           (expose-and-maybe-bounce [chosen-subtype]
+             {:choices {:req #(and (ice? %) (not (rezzed? %)))}
+              :delayed-completion true
+              :msg (str "name " chosen-subtype)
+              :effect (req (when-completed (expose state side target)
+                             (do (if (and async-result
+                                          (has-subtype? target chosen-subtype))
+                                   (do (move state :corp target :hand)
+                                       (system-msg state :runner
+                                                   (str "add " (:title target) " to HQ"))))
+                                 (effect-completed state side eid))))})]
+     {:events {:successful-run
+              {:interactive (req true)
+               :delayed-completion true
+               :req (req (and (= target :hq)
+                              (first-successful-run-on-server? state :hq)
+                              (some #(and (ice? %) (not (rezzed? %)))
+                                    (all-installed state :corp))))
+               :effect (effect (continue-ability
+                                {:prompt "Use Wari?"
+                                 :choices ["Yes" "No"]
+                                 :delayed-completion true
+                                 :effect (req (if (= target "Yes")
+                                                (continue-ability state side
+                                                                  (prompt-for-subtype)
+                                                                  card nil)
+                                                (effect-completed state side eid)))}
+                                card nil))}}})})

@@ -46,6 +46,7 @@
   This is part 1 - the player keeps choosing cards until there are no more available choices. A wait prompt should
   exist before calling this function. See Indexing and Making an Entrance for examples on how to call this function."
 
+  ([reorder-side cards] (reorder-choice reorder-side (other-side reorder-side) cards `() (count cards) cards nil))
   ([reorder-side wait-side remaining chosen n original] (reorder-choice reorder-side wait-side remaining chosen n original nil))
   ([reorder-side wait-side remaining chosen n original dest]
   {:prompt (str "Select a card to move next "
@@ -99,6 +100,8 @@
     (swap! state update-in (cons :corp (:zone a)) #(assoc % a-index b-new))
     (swap! state update-in (cons :corp (:zone b)) #(assoc % b-index a-new))
     (doseq [newcard [a-new b-new]]
+      (unregister-events state side newcard)
+      (register-events state side (:events (card-def newcard)) newcard)
       (doseq [h (:hosted newcard)]
         (let [newh (-> h
                        (assoc-in [:zone] '(:onhost))

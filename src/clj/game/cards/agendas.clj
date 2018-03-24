@@ -105,6 +105,23 @@
                             :msg "give the Runner a tag for trashing a Corp card"
                             :effect (effect (tag-runner :runner eid 1))}}}
 
+   "Armed Intimidation"
+   {:delayed-completion true
+    :effect (effect (show-wait-prompt :corp "Runner to suffer 5 meat damage or take 2 tags")
+                    (continue-ability :runner
+                      {:delayed-completion true
+                       :choices ["Suffer 5 meat damage" "Take 2 tags"]
+                       :prompt "Choose Armed Intimidation score effect"
+                       :effect (req (clear-wait-prompt state :corp)
+                                    (case target
+                                      "Suffer 5 meat damage"
+                                      (do (damage state :runner eid :meat 5 {:card card :unboostable true})
+                                          (system-msg state :runner "chooses to suffer 5 meat damage from Armed Intimidation"))
+                                      "Take 2 tags"
+                                      (do (tag-runner state :runner eid 2 {:card card})
+                                          (system-msg state :runner "chooses to take 2 tags from Armed Intimidation"))))}
+                      card nil))}
+
    "Armored Servers"
    {:implementation "Runner must trash cards manually when required"
     :effect (effect (add-counter card :agenda 1))
@@ -129,7 +146,7 @@
                                {:delayed-completion true
                                 :choices ["0", "1", "2"]
                                 :prompt "How many advancement tokens?"
-                                :effect (req (let [c (Integer/parseInt target)]
+                                :effect (req (let [c (str->int target)]
                                                (continue-ability
                                                  state side
                                                  {:choices {:req can-be-advanced?}
@@ -139,6 +156,51 @@
                                                   :effect (effect (add-prop :corp target :advance-counter c {:placed true})
                                                                   (clear-wait-prompt :runner))} card nil)))}
                               card nil))}}
+
+   "Bacterial Programming"
+   (letfn [(hq-step [remaining to-trash to-hq]
+             {:delayed-completion true
+              :prompt "Select a card to move to HQ"
+              :choices (conj (vec remaining) "Done")
+              :effect (req (if (= "Done" target)
+                             (do
+                               (doseq [t to-trash]
+                                 (trash state :corp t {:unpreventable true}))
+                               (doseq [h to-hq]
+                                 (move state :corp h :hand))
+                               (continue-ability state :corp (reorder-choice :corp (vec remaining)) card nil)
+                               (system-msg state :corp (str "uses Bacterial Programming to add " (count to-hq)
+                                                            " cards to HQ, discard " (count to-trash)
+                                                            ", and arrange the top cards of R&D")))
+                             (continue-ability state :corp (hq-step
+                                                             (clojure.set/difference (set remaining) (set [target]))
+                                                             to-trash
+                                                             (conj to-hq target)) card nil)))})
+           (trash-step [remaining to-trash]
+             {:delayed-completion true
+              :prompt "Select a card to discard"
+              :choices (conj (vec remaining) "Done")
+              :effect (req (if (= "Done" target)
+                             (continue-ability state :corp (hq-step remaining to-trash `()) card nil)
+                             (continue-ability state :corp (trash-step
+                                                             (clojure.set/difference (set remaining) (set [target]))
+                                                             (conj to-trash target)) card nil)))})]
+     (let [arrange-rd (effect (continue-ability
+                                {:optional
+                                 {:delayed-completion true
+                                  :prompt "Arrange top 7 cards of R&D?"
+                                  :yes-ability {:delayed-completion true
+                                                :effect (req (let [c (take 7 (:deck corp))]
+                                                               (when (:run @state)
+                                                                (swap! state assoc-in [:run :shuffled-during-access :rd] true))
+                                                               (show-wait-prompt state :runner "Corp to use Bacterial Programming")
+                                                               (continue-ability state :corp (trash-step c `()) card nil)))}}}
+                                card nil))]
+       {:effect arrange-rd
+        :delayed-completion true
+        :stolen {:delayed-completion true
+                 :effect arrange-rd}
+        :interactive (req true)}))
 
    "Bifrost Array"
    {:req (req (not (empty? (filter #(not= (:title %) "Bifrost Array") (:scored corp)))))
@@ -267,6 +329,9 @@
                                                                    (swap! state update-in [:run :run-effect]
                                                                           #(assoc % :replace-access psi-effect)))
                                                                  (effect-completed state side eid))}}}}})
+
+   "Degree Mill"
+   {:steal-cost-bonus (req [:shuffle-installed-to-stack 2])}
 
    "Director Haas Pet Project"
    (letfn [(install-ability [server-name n]
@@ -437,7 +502,7 @@
    {:interactive (req true)
     :choices ["0", "1", "2"]
     :prompt "How many power counters?"
-    :effect (req (let [c (Integer/parseInt target)]
+    :effect (req (let [c (str->int target)]
                    (continue-ability
                      state side
                      {:choices {:req #(< 0 (get-in % [:counter :power] 0))}
@@ -538,12 +603,20 @@
    "Mandatory Seed Replacement"
    (letfn [(msr [] {:prompt "Select two pieces of ICE to swap positions"
                     :choices {:req #(and (installed? %) (ice? %)) :max 2}
+                    :delayed-completion true
                     :effect (req (if (= (count targets) 2)
                                    (do (swap-ice state side (first targets) (second targets))
-                                       (resolve-ability state side (msr) card nil))
-                                   (system-msg state :corp (str "has finished rearranging ICE"))))})]
-     {:msg "rearrange any number of ICE"
-      :effect (effect (resolve-ability (msr) card nil))})
+                                       (system-msg state side
+                                                   (str "swaps the position of "
+                                                        (card-str state (first targets))
+                                                        " and "
+                                                        (card-str state (second targets))))
+                                       (continue-ability state side (msr) card nil))
+                                   (do (system-msg state :corp (str "has finished rearranging ICE"))
+                                       (effect-completed state side eid))))})]
+     {:delayed-completion true
+      :msg "rearrange any number of ICE"
+      :effect (effect (continue-ability (msr) card nil))})
 
    "Mandatory Upgrades"
    {:msg "gain an additional [Click] per turn"
@@ -708,9 +781,9 @@
    "Profiteering"
    {:interactive (req true)
     :choices ["0" "1" "2" "3"] :prompt "How many bad publicity?"
-    :msg (msg "take " target " bad publicity and gain " (* 5 (Integer/parseInt target)) " [Credits]")
-    :effect (final-effect (gain :credit (* 5 (Integer/parseInt target))
-                                :bad-publicity (Integer/parseInt target)))}
+    :msg (msg "take " target " bad publicity and gain " (* 5 (str->int target)) " [Credits]")
+    :effect (final-effect (gain :credit (* 5 (str->int target))
+                                :bad-publicity (str->int target)))}
 
    "Project Ares"
    (letfn [(trash-count-str [card]
@@ -874,13 +947,15 @@
 
    "Research Grant"
    {:interactive (req true)
+    :silent (req (empty? (filter #(= (:title %) "Research Grant") (all-installed state :corp))))
     :req (req (not (empty? (filter #(= (:title %) "Research Grant") (all-installed state :corp)))))
     :delayed-completion true
     :effect (effect (continue-ability
                       {:prompt "Select another installed copy of Research Grant to score"
                        :choices {:req #(= (:title %) "Research Grant")}
+                       :delayed-completion true
                        :effect (effect (set-prop target :advance-counter (:advancementcost target))
-                                       (score target))
+                                       (score eid (get-card state target)))
                        :msg "score another installed copy of Research Grant"}
                      card nil))}
 
@@ -924,6 +999,21 @@
    {:delayed-completion true
     :msg "do 2 meat damage"
     :effect (effect (damage eid :meat 2 {:card card}))}
+
+   "SSL Endorsement"
+   (let [add-credits (effect (add-counter card :credit 9))
+         remove-credits {:optional {:req (req (pos? (get-in card [:counter :credit] -1)))
+                                    :prompt "Gain 3 [Credits] from SSL Endorsement?"
+                                    :yes-ability
+                                    {:effect (req (when (pos? (get-in card [:counter :credit] -1))
+                                                    (gain state :corp :credit 3)
+                                                    (system-msg state :corp (str "uses SSL Endorsement to gain 3 [Credits]"))
+                                                    (add-counter state side card :credit -3)))}}}]
+     {:effect add-credits
+      :stolen {:effect add-credits}
+      :interactive (req true)
+      :events {:corp-turn-begins remove-credits}
+      :flags {:has-events-when-stolen true}})
 
    "Standoff"
    (letfn [(stand [side]

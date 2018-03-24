@@ -89,13 +89,13 @@
                           :brain-damage 0 :click-per-turn 4 :agenda-point-req 7 :keep false}})]
     (init-identity state :corp corp-identity)
     (init-identity state :runner runner-identity)
-    (swap! game-states assoc gameid state)
+    ;(swap! game-states assoc gameid state)
     (let [side :corp]
       (when-completed (trigger-event-sync state side :pre-start-game)
                       (let [side :runner]
                         (when-completed (trigger-event-sync state side :pre-start-game)
                                         (init-hands state)))))
-    @game-states))
+    state))
 
 (defn server-card
   ([title] (@all-cards title))
@@ -174,15 +174,25 @@
   "End phase 1.2 and trigger appropriate events for the player."
   [state side args]
   (turn-message state side true)
-  (gain state side :click (+ (get-in @state [side :click-per-turn]) (or (get-in @state [side :extra-click-temp]) 0)))
-  (swap! state dissoc-in [side :extra-click-temp])
-  (when-completed (trigger-event-sync state side (if (= side :corp) :corp-turn-begins :runner-turn-begins))
-                  (do (when (= side :corp)
-                        (draw state side)
-                        (trigger-event state side :corp-mandatory-draw))
-                      (swap! state dissoc (if (= side :corp) :corp-phase-12 :runner-phase-12))
-                      (when (= side :corp)
-                        (update-all-advancement-costs state side)))))
+  (let [extra-clicks (or (get-in @state [side :extra-click-temp]) 0)]
+    (gain state side :click (get-in @state [side :click-per-turn]))
+    (when-completed (trigger-event-sync state side (if (= side :corp) :corp-turn-begins :runner-turn-begins))
+                    (do (when (= side :corp)
+                          (draw state side)
+                          (trigger-event state side :corp-mandatory-draw))
+
+                        (cond
+
+                          (< extra-clicks 0)
+                          (lose state side :click (abs extra-clicks))
+
+                          (> extra-clicks 0)
+                          (gain state side :click extra-clicks))
+
+                        (swap! state dissoc-in [side :extra-click-temp])
+                        (swap! state dissoc (if (= side :corp) :corp-phase-12 :runner-phase-12))
+                        (when (= side :corp)
+                          (update-all-advancement-costs state side))))))
 
 (defn start-turn
   "Start turn."
@@ -210,35 +220,41 @@
                  "info")
       (end-phase-12 state side args))))
 
-(defn end-turn [state side args]
-  (let [max-hand-size (max (hand-size state side) 0)]
-    (when (<= (count (get-in @state [side :hand])) max-hand-size)
-      (turn-message state side false)
-      (if (= side :runner)
-        (do (when (neg? (hand-size state side))
-              (flatline state))
-            (trigger-event state side :runner-turn-ends))
-        (trigger-event state side :corp-turn-ends))
-      (doseq [a (get-in @state [side :register :end-turn])]
-        (resolve-ability state side (:ability a) (:card a) (:targets a)))
-      (let [rig-cards (apply concat (vals (get-in @state [:runner :rig])))
-            hosted-cards (filter :installed (mapcat :hosted rig-cards))
-            hosted-on-ice (->> (get-in @state [:corp :servers]) seq flatten (mapcat :ices) (mapcat :hosted))]
-        (doseq [card (concat rig-cards hosted-cards hosted-on-ice)]
-          ;; Clear the added-virus-counter flag for each virus in play.
-          ;; We do this even on the corp's turn to prevent shenanigans with something like Gorman Drip and Surge
-          (when (has-subtype? card "Virus")
-            (set-prop state :runner card :added-virus-counter false))))
-      (swap! state assoc :end-turn true)
-      (swap! state update-in [side :register] dissoc :cannot-draw)
-      (swap! state update-in [side :register] dissoc :drawn-this-turn)
-      (doseq [c (filter #(= :this-turn (:rezzed %)) (all-installed state :corp))]
-        (update! state side (assoc c :rezzed true)))
-      (clear-turn-register! state)
-      (swap! state dissoc :turn-events)
-      (when-let [extra-turns (get-in @state [side :extra-turns])]
-        (when (> extra-turns 0)
-          (start-turn state side nil)
-          (swap! state update-in [side :extra-turns] dec)
-          (let [turns (if (= 1 extra-turns) "turn" "turns")]
-            (system-msg state side (clojure.string/join ["will have " extra-turns " extra " turns " remaining."]))))))))
+(defn end-turn
+  ([state side args] (end-turn state side (make-eid state) args))
+  ([state side eid args]
+   (let [max-hand-size (max (hand-size state side) 0)]
+     (when (<= (count (get-in @state [side :hand])) max-hand-size)
+       (turn-message state side false)
+       (when (and (= side :runner)
+                  (neg? (hand-size state side)))
+         (flatline state))
+       (when-completed
+         (trigger-event-sync state side (if (= side :runner) :runner-turn-ends :corp-turn-ends))
+         (do (when (= side :runner)
+               (trigger-event state side :post-runner-turn-ends))
+             (doseq [a (get-in @state [side :register :end-turn])]
+               (resolve-ability state side (:ability a) (:card a) (:targets a)))
+             (swap! state assoc-in [side :register-last-turn] (-> @state side :register))
+             (let [rig-cards (apply concat (vals (get-in @state [:runner :rig])))
+                   hosted-cards (filter :installed (mapcat :hosted rig-cards))
+                   hosted-on-ice (->> (get-in @state [:corp :servers]) seq flatten (mapcat :ices) (mapcat :hosted))]
+               (doseq [card (concat rig-cards hosted-cards hosted-on-ice)]
+                 ;; Clear the added-virus-counter flag for each virus in play.
+                 ;; We do this even on the corp's turn to prevent shenanigans with something like Gorman Drip and Surge
+                 (when (has-subtype? card "Virus")
+                   (set-prop state :runner card :added-virus-counter false))))
+             (swap! state assoc :end-turn true)
+             (swap! state update-in [side :register] dissoc :cannot-draw)
+             (swap! state update-in [side :register] dissoc :drawn-this-turn)
+             (doseq [c (filter #(= :this-turn (:rezzed %)) (all-installed state :corp))]
+               (update! state side (assoc c :rezzed true)))
+             (clear-turn-register! state)
+             (swap! state dissoc :turn-events)
+             (when-let [extra-turns (get-in @state [side :extra-turns])]
+               (when (> extra-turns 0)
+                 (start-turn state side nil)
+                 (swap! state update-in [side :extra-turns] dec)
+                 (let [turns (if (= 1 extra-turns) "turn" "turns")]
+                   (system-msg state side (clojure.string/join ["will have " extra-turns " extra " turns " remaining."])))))
+             (effect-completed state side eid)))))))

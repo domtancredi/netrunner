@@ -1,6 +1,8 @@
 (ns game.utils
   (:require [clojure.string :refer [split-lines split join]]))
 
+(declare pluralize)
+
 (def cid (atom 0))
 
 (defn make-cid []
@@ -82,6 +84,8 @@
                        :net-damage (str value " net damage")
                        :mill (str value " card mill")
                        :hardware (str value " installed hardware")
+                       :shuffle-installed-to-stack (str "shuffling " value " installed "
+                                                        (pluralize "card" value) " into the stack")
                        (str value (str key)))) (partition 2 (flatten costs)))))
 
 (defn vdissoc [v n]
@@ -253,6 +257,11 @@
     :hand [:servers :hq]
     :deck [:servers :rd]
     nil))
+
+(defn type->rig-zone
+  "Converts a runner's card type to a vector zone, e.g. 'Program' -> [:rig :program]"
+  [type]
+  (vec [:rig (-> type .toLowerCase keyword)]))
 
 (defn get-server-type [zone]
   (or (#{:hq :rd :archives} zone) :remote))

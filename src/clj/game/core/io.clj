@@ -130,13 +130,23 @@
                                      (and (card-is? target :side :runner) (has-subtype? target "Virus")) :virus)
                         advance (= :advance-counter c-type)]
                     (cond advance (set-adv-counter state side target value)
-                          (not c-type) (toast state side "You need to specify a counter type for that card." "error"
+                          (not c-type) (toast state side (str "Could not infer what counter type you mean. Please specify one manually, by typing "
+                                                              "'/counter TYPE " value "', where TYPE is advance, agenda, credit, power, or virus.")
+                                              "error"
                                               {:time-out 0 :close-button true})
                           :else (do (set-prop state side target :counter (merge (:counter target) {c-type value}))
                                     (system-msg state side (str "sets " (name c-type) " counters to " value " on "
                                                                 (card-str state target)))))))
      :choices {:req (fn [t] (card-is? t :side side))}}
     {:title "/counter command"} nil))
+
+(defn command-facedown [state side]
+  (resolve-ability state side
+                   {:prompt "Select a card to install facedown"
+                    :choices {:req #(and (= (:side %) "Runner")
+                                         (in-hand? %))}
+                    :effect (effect (runner-install target {:facedown true}))}
+                   {:title "/faceup command"} nil))
 
 (defn command-counter [state side args]
   (if (= 1 (count args))
@@ -176,6 +186,7 @@
 (defn command-close-prompt [state side]
   (when-let [fprompt (-> @state side :prompt first)]
     (swap! state update-in [side :prompt] rest)
+    (swap! state dissoc-in [side :selected])
     (effect-completed state side (:eid fprompt))))
 
 (defn parse-command [text]
@@ -208,7 +219,7 @@
           "/draw"       #(draw %1 %2 (max 0 value))
           "/end-run"    #(when (= %2 :corp) (end-run %1 %2))
           "/error"      #(show-error-toast %1 %2)
-          "/handsize"   #(swap! %1 assoc-in [%2 :hand-size-modification] (- (max 0 value) (:hand-size-base %2)))
+          "/handsize"   #(swap! %1 assoc-in [%2 :hand-size-modification] (- (max 0 value) (get-in @%1 [%2 :hand-size-base])))
           "/jack-out"   #(when (= %2 :runner) (jack-out %1 %2 nil))
           "/link"       #(swap! %1 assoc-in [%2 :link] (max 0 value))
           "/memory"     #(swap! %1 assoc-in [%2 :memory] value)
@@ -217,6 +228,12 @@
                                              :effect (effect (move target :deck))
                                              :choices {:req (fn [t] (and (card-is? t :side %2) (in-hand? t)))}}
                                             {:title "/move-bottom command"} nil)
+          "/move-deck"   #(resolve-ability %1 %2
+                                           {:prompt "Select a card to move to the top of your deck"
+                                            :effect (req (let [c (deactivate %1 %2 target)]
+                                                           (move %1 %2 c :deck {:front true})))
+                                            :choices {:req (fn [t] (card-is? t :side %2))}}
+                                           {:title "/move-deck command"} nil)
           "/move-hand"  #(resolve-ability %1 %2
                                           {:prompt "Select a card to move to your hand"
                                            :effect (req (let [c (deactivate %1 %2 target)]
@@ -239,6 +256,8 @@
                                                           (move %1 %2 c :rfg)))
                                            :choices {:req (fn [t] (card-is? t :side %2))}}
                                           {:title "/rfg command"} nil)
+          "/facedown"   #(when (= %2 :runner)
+                           (command-facedown %1 %2))
           "/roll"       #(command-roll %1 %2 value)
           "/tag"        #(swap! %1 assoc-in [%2 :tag] (max 0 value))
           "/take-brain" #(when (= %2 :runner) (damage %1 %2 :brain (max 0 value)))

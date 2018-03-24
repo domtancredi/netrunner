@@ -80,15 +80,17 @@
 
 (defn card-init
   "Initializes the abilities and events of the given card."
-  ([state side card] (card-init state side card true))
-  ([state side card resolve] (card-init state side (make-eid state) card resolve))
-  ([state side eid card resolve]
+  ([state side card] (card-init state side card {:resolve-effect true :init-data true}))
+  ([state side card args] (card-init state side (make-eid state) card args))
+  ([state side eid card {:keys [resolve-effect init-data] :as args}]
    (let [cdef (card-def card)
          recurring (:recurring cdef)
          abilities (ability-init cdef)
          run-abs (runner-ability-init cdef)
          subroutines (subroutines-init cdef)
-         c (merge card (:data cdef) {:abilities abilities :subroutines subroutines :runner-abilities run-abs})
+         c (merge card
+                  (when init-data (:data cdef))
+                  {:abilities abilities :subroutines subroutines :runner-abilities run-abs})
          c (if (number? recurring) (assoc c :rec-counter recurring) c)
          c (if (string? (:strength c)) (assoc c :strength 0) c)]
      (when recurring
@@ -105,7 +107,7 @@
      (update! state side c)
      (when-let [events (:events cdef)]
        (register-events state side events c))
-     (if (and resolve (is-ability? cdef))
+     (if (and resolve-effect (is-ability? cdef))
        (resolve-ability state side eid cdef c nil)
        (effect-completed state side eid))
      (when-let [in-play (:in-play cdef)]
@@ -153,6 +155,11 @@
       ;; failed ICE check
       :ice
       (reason-toast (str "Unable to install " title ": can only install 1 piece of ICE per turn")))))
+
+(defn corp-installable-type?
+  "Is the card of an acceptable type to be installed in a server"
+  [card]
+  (some? (#{"Asset" "Agenda" "ICE" "Upgrade"} (:type card))))
 
 (defn- corp-install-asset-agenda
   "Forces the corp to trash an existing asset or agenda if a second was just installed."
@@ -226,7 +233,7 @@
              end-cost (if no-install-cost 0 (install-cost state side card all-cost))
              install-state (or install-state (:install-state cdef))]
          (when (and (corp-can-install? state side card dest-zone) (not (install-locked? state :corp)))
-           (if-let [cost-str (pay state side card end-cost action)]
+           (if-let [cost-str (pay state side card end-cost {:action action})]
              (do (let [c (-> card
                              (assoc :advanceable (:advanceable cdef) :new true)
                              (dissoc :seen :disabled))]
@@ -258,7 +265,9 @@
                                            (= install-state :face-up)
                                            (do (if (:install-state cdef)
                                                  (card-init state side
-                                                            (assoc (get-card state moved-card) :rezzed true :seen true) false)
+                                                            (assoc (get-card state moved-card) :rezzed true :seen true)
+                                                            {:resolve-effect false
+                                                             :init-data true})
                                                  (update! state side (assoc (get-card state moved-card) :rezzed true :seen true)))
                                                (when-not (:delayed-completion cdef)
                                                  (effect-completed state side eid)))
@@ -378,7 +387,8 @@
                        c (assoc c :installed true :new true)
                        installed-card (if facedown
                                         (update! state side c)
-                                        (card-init state side c false))]
+                                        (card-init state side c {:resolve-effect false
+                                                                 :init-data true}))]
                    (runner-install-message state side (:title card) cost-str params)
                    (play-sfx state side "install-runner")
                    (when (and (is-type? card "Program") (neg? (get-in @state [:runner :memory])))

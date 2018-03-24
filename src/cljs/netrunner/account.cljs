@@ -7,14 +7,15 @@
             [goog.dom :as gdom]
             [netrunner.auth :refer [authenticated avatar] :as auth]
             [netrunner.appstate :refer [app-state]]
-            [netrunner.ajax :refer [POST GET]]))
+            [netrunner.ajax :refer [POST GET PUT]]
+            [jinteki.cards :refer [all-cards]]))
 
 (def alt-arts-channel (chan))
 (defn load-alt-arts []
-  (go (let [alt_info (->> (<! (GET "/data/altarts"))
+  (go (let [alt_info (->> (<! (GET "/data/cards/altarts"))
                        (:json)
                        (map #(select-keys % [:version :name])))
-            cards (->> (:cards @app-state)
+            cards (->> @all-cards
                     (filter #(not (:replaced_by %)))
                     (map #(select-keys % [:title :setname :code :alt_art :replaces :replaced_by]))
                     ;(map #(let [replaces (:replaces %)
@@ -47,12 +48,12 @@
     (om/set-state! owner :flash-message "Profile updated - Please refresh your browser")
     (case (:status response)
       401 (om/set-state! owner :flash-message "Invalid login or password")
-      421 (om/set-state! owner :flash-message "No account with that email address exists")
+      404 (om/set-state! owner :flash-message "No account with that email address exists")
       :else (om/set-state! owner :flash-message "Profile updated - Please refresh your browser"))))
 
 (defn post-options [url callback]
   (let [params (:options @app-state)]
-    (go (let [response (<! (POST url params :json))]
+    (go (let [response (<! (PUT url params :json))]
           (callback response)))))
 
 (defn handle-post [event owner url ref]
@@ -127,7 +128,7 @@
   [owner value]
   (om/set-state! owner :alt-card-version value)
   (let [code (om/get-state owner :alt-card)
-        card (some #(when (= code (:code %)) %) (:cards @app-state))]
+        card (some #(when (= code (:code %)) %) @all-cards)]
     (update-card-art owner card value)))
 
 (defn reset-card-art
@@ -167,7 +168,7 @@
         [:div.account
          [:div.panel.blue-shade.content-page#profile-form {:ref "profile-form"}
           [:h2 "Settings"]
-          [:form {:on-submit #(handle-post % owner "/update-profile" "profile-form")}
+          [:form {:on-submit #(handle-post % owner "/profile" "profile-form")}
            [:section
             [:h3 "Avatar"]
             (om/build avatar user {:opts {:size 38}})
@@ -251,7 +252,9 @@
 
                [:div {:class "alt-art-group"}
                 (for [version (conj (keys (get-in (:alt-arts @app-state) [(om/get-state owner :alt-card) :alt_art])) :default)]
-                  (let [url (image-url (om/get-state owner :alt-card) version)]
+                  (let [curr-alt (om/get-state owner :alt-card)
+                        url (image-url curr-alt version)
+                        alt (get (:alt-arts @app-state) curr-alt)]
                     [:div
                      [:div
                       [:div [:label [:input {:type "radio"
@@ -263,6 +266,7 @@
                      [:div
                       [:img {:class "alt-art-select"
                              :src url
+                             :alt (str (:title alt) " (" (alt-art-name version) ")")
                              :on-click #(set-card-art owner (name version))
                              :onError #(-> % .-target js/$ .hide)
                              :onLoad #(-> % .-target js/$ .show)}]]]))]

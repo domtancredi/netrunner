@@ -62,11 +62,13 @@
                         [:li [:code "/link n"] " - Set your link to n"]
                         [:li [:code "/memory n"] " - Set your memory to n"]
                         [:li [:code "/move-bottom"] " - Pick a card in your hand to put on the bottom of your deck"]
+                        [:li [:code "/move-deck"] " - Pick a card from your play-area to put on top of your deck"]
                         [:li [:code "/move-hand"] " - Pick a card from your play-area to put into your hand"]
                         [:li [:code "/psi"] " - Start a Psi game (Corp only)"]
                         [:li [:code "/rez"] " - Select a card to rez, ignoring all costs (Corp only)"]
                         [:li [:code "/rez-all"] " - Rez all cards, ignoring all costs and flip cards in archives faceup (Corp only). For revealing your servers at the end of a game."]
                         [:li [:code "/rfg"] " - Select a card to remove from the game"]
+                        [:li [:code "/facedown"] " - Select a card to install facedown in your rig (Runner only)"]
                         [:li [:code "/roll n"] " - Roll an n-sided die"]
                         [:li [:code "/tag n"] " - Set your tags to n"]
                         [:li [:code "/take-brain n"] " - Take n brain damage (Runner only)"]
@@ -191,9 +193,11 @@
              :title "What is MWL and \"Tournament legal\"? Why is my deck marked as \"Casual play only\"?"
              :content (list
                         [:p "New Angeles Police Department Most Wanted List, also known as NAPD MWL or just MWL, is a list "
-                         "of restricted cards introduced by FFG to tournament play. Each of the cards on the list reduces "
-                         "the influence printed on the ID by 1, with a minimum of 1 (so Professor is unaffected). For "
-                         "more information about the MWL read Tournament Rules from "
+                         "of cards with additional deck building restrictions for tournament play. "
+                         "There are two categories of MWL cards: \"restricted\" and \"removed\". "
+                         "You may only include up to one card (up to its maximum number of copies) from the restricted category. "
+                         "You may not include cards from the removed category. "
+                         "For more information about the MWL read Tournament Rules from "
                          [:a {:href "https://www.fantasyflightgames.com/en/products/android-netrunner-the-card-game/"} "the official FFG page"] "."]
                         [:p "Decks that are valid and fit within tournament restrictions are marked " [:span.legal "Tournament legal" ] ". "
                          "Decks that fit within the printed influence limit, but not within the tournament restrictions, "

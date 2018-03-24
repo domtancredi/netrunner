@@ -141,6 +141,19 @@
                                                           (has-subtype? % "Transaction")) (:discard corp)) :sorted))
                  :effect (effect (play-instant nil target {:ignore-cost true}) (move target :rfg))}]}
 
+   "Calibration Testing"
+   {:abilities [{:label "[Trash]: Place 1 advancement token on a card in this server"
+                 :delayed-completion true
+                 :effect (effect (continue-ability
+                                   {:prompt "Select a card in this server"
+                                    :choices {:req #(in-same-server? % card)}
+                                    :delayed-completion true
+                                    :msg (msg "place an advancement token on " (card-str state target))
+                                    :effect (effect (add-prop target :advance-counter 1 {:placed true})
+                                                    (trash eid card {:cause :ability-cost}))}
+                                   card nil))}]}
+
+
    "Caprice Nisei"
    {:events {:pass-ice {:req (req (and this-server
                                        (= (:position run) 1))) ; trigger when last ice passed
@@ -158,6 +171,17 @@
                                 :delayed-completion true
                                 :effect (effect (tag-runner :runner eid 1))
                                 :msg "give the Runner 1 tag"}}}
+
+   "Code Replicator"
+   {:abilities [{:label "[Trash]: Force the runner to approach the passed piece of ice again"
+                 :req (req (and this-server
+                                (> (count (get-run-ices state)) (:position run))
+                                (:rezzed (get-in (:ices (card->server state card)) [(:position run)]))))
+                 :effect (req (let [icename (:title (get-in (:ices (card->server state card)) [(:position run)]))]
+                                (trash state :corp (get-card state card))
+                                (swap! state update-in [:run] #(assoc % :position (inc (:position run))))
+                                 (system-msg state :corp (str "trashes Code Replicator to make the runner approach "
+                                                              icename " again"))))}]}
 
    "Corporate Troubleshooter"
    {:abilities [{:label "[Trash]: Add strength to a rezzed ICE protecting this server" :choices :credit
@@ -280,6 +304,14 @@
     :events {:corp-turn-begins ability}
     :abilities [ability]})
 
+   "Forced Connection"
+   {:access {:req (req (not= (first (:zone card)) :discard))
+             :interactive (req true)
+             :trace {:base 3
+                     :msg "give the Runner 2 tags"
+                     :delayed-completion true
+                     :effect (effect (tag-runner :runner eid 2))}}}
+
    "Fractal Threat Matrix"
    {:implementation "Manual trigger each time all subs are broken"
     :abilities [{:label "Trash the top 2 cards from the Stack"
@@ -346,6 +378,56 @@
    {:events {:successful-run {:req (req this-server) :msg "do 1 net damage"
                               :delayed-completion true
                               :effect (effect (damage eid :net 1 {:card card}))}}}
+
+   "Jinja City Grid"
+   (letfn [(install-ice [ice ices grids server]
+             (let [remaining (remove-once #(not= (:cid %) (:cid ice)) ices)]
+             {:delayed-completion true
+              :effect (req (if (= "None" server)
+                             (continue-ability state side (choose-ice remaining grids) card nil)
+                             (do (system-msg state side (str "reveals that they drew " (:title ice)))
+                                 (when-completed (corp-install state side ice server {:extra-cost [:credit -4]})
+                                                 (if (= 1 (count ices))
+                                                   (effect-completed state side eid)
+                                                   (continue-ability state side (choose-ice remaining grids)
+                                                                     card nil))))))}))
+
+           (choose-grid [ice ices grids]
+             (if (= 1 (count grids))
+               (install-ice ice ices grids (-> (first grids) :zone second zone->name))
+               {:delayed-completion true
+                :prompt (str "Choose a server to install " (:title ice))
+                :choices (conj (mapv #(-> % :zone second zone->name) grids) "None")
+                :effect (effect (continue-ability (install-ice ice ices grids target) card nil))}))
+
+           (choose-ice [ices grids]
+             (if (empty? ices)
+               nil
+               {:delayed-completion true
+                :prompt "Choose an ice to reveal and install, or None to decline"
+                :choices (conj (mapv :title ices) "None")
+                :effect (req (if (= "None" target)
+                               (effect-completed state side eid)
+                               (continue-ability state side
+                                                 (choose-grid (some #(when (= target (:title %)) %) ices)
+                                                              ices grids)
+                                                 card nil)))}))]
+
+     {:events {:corp-draw {:req (req (some #(is-type? % "ICE")
+                                           (:most-recent-drawn corp-reg)))
+                           ;; THIS IS A HACK: it prevents multiple Jinja from showing the "choose a server to install into" sequence
+                           :once :per-turn
+                           :once-key :jinja-city-grid-draw
+                           :delayed-completion true
+                           :effect (req (let [ices (filter #(and (is-type? % "ICE")
+                                                                 (get-card state %))
+                                                           (:most-recent-drawn corp-reg))
+                                              grids (filterv #(and (:rezzed %) (= "Jinja City Grid" (:title %)))
+                                                             (all-installed state :corp))]
+                                          (if (not-empty ices)
+                                            (continue-ability state side (choose-ice ices grids) card nil)
+                                            (effect-completed state side eid))))}
+               :post-corp-draw {:effect (req (swap! state dissoc-in [:per-turn :jinja-city-grid-draw]))}}})
 
    "Keegan Lane"
    {:abilities [{:label "[Trash], remove a tag: Trash a program"
@@ -448,9 +530,11 @@
 
    "Mumbad Virtual Tour"
    {:implementation "Only forces trash if runner has no Imps and enough credits in the credit pool"
+    :flags {:must-trash true}
     :access {:req (req installed)
              :effect (req (let [trash-cost (trash-cost state side card)
-                                slow-trash (any-flag-fn? state :runner :slow-trash true)]
+                                no-salsette (remove #(= (:title %) "Salsette Slums") (all-active state :runner))
+                                slow-trash (any-flag-fn? state :runner :slow-trash true no-salsette)]
                             (if (and (can-pay? state :runner nil :credit trash-cost)
                                      (not slow-trash))
                               (do (toast state :runner "You have been forced to trash Mumbad Virtual Tour" "info")

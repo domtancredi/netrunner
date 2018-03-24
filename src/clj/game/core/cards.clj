@@ -1,7 +1,7 @@
 (in-ns 'game.core)
 
-(declare active? all-installed cards card-init deactivate card-flag? get-card-hosted handle-end-run has-subtype? ice?
-         make-eid register-events remove-from-host remove-icon reset-card rezzed? trash trigger-event update-hosted!
+(declare active? all-installed cards card-init deactivate card-flag? get-card-hosted handle-end-run hardware? has-subtype? ice?
+         make-eid program? register-events remove-from-host remove-icon reset-card resource? rezzed? trash trigger-event update-hosted!
          update-ice-strength unregister-events)
 
 ;;; Functions for loading card information.
@@ -73,7 +73,10 @@
              trash-hosted (fn [h]
                              (trash state side
                                     (update-in h [:zone] #(map to-keyword %))
-                                    {:unpreventable true :suppress-event true})
+                                    {:unpreventable true
+                                     :suppress-event true
+                                     ;; this handles executives getting trashed before World's Plaza #2949
+                                     :host-trashed true})
                                ())
              update-hosted (fn [h]
                              (let [newz (flatten (list (if (vector? to) to [to])))
@@ -90,7 +93,7 @@
              c (if (and (= side :corp) (= (first dest) :discard) (rezzed? card))
                  (assoc card :seen true) card)
              c (if (and (or installed host (#{:servers :scored :current} (first zone)))
-                        (#{:hand :deck :discard} (first dest))
+                        (#{:hand :deck :discard :rfg} (first dest))
                         (not (:facedown c)))
                  (deactivate state side c) c)
              c (if (= dest [:rig :facedown]) (assoc c :facedown true :installed true) (dissoc c :facedown))
@@ -189,10 +192,15 @@
 
 ;;; Misc card functions
 (defn get-virus-counters
-  "Calculate the number of virus countes on the given card, taking Hivemind into account."
+  "Calculate the number of virus counters on the given card, taking Hivemind into account."
   [state side card]
   (let [hiveminds (filter #(= (:title %) "Hivemind") (all-installed state :runner))]
     (reduce + (map #(get-in % [:counter :virus] 0) (cons card hiveminds)))))
+
+(defn count-virus-programs
+  "Calculate the number of virus programs in play"
+  [state]
+  (count (filter #(has-subtype? % "Virus") (all-installed state :runner))))
 
 (defn card->server
   "Returns the server map that this card is installed in or protecting."
@@ -235,4 +243,4 @@
     (let [c (dissoc card :disabled)]
       (update! state side c)
       (when (active? card)
-        (card-init state side c false)))))
+        (card-init state side c {:resolve-effect false})))))
